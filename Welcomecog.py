@@ -9,9 +9,9 @@ from datetime import datetime, timezone
 import discord
 from discord import app_commands
 from discord.ext import commands
+from branding import BRAND_COLOR, FOOTER_TEXT
 
-PURPLE = 0x8E00FF
-FOOTER_TEXT = "Powered by FSLLC / FrostlineSolutions.com"
+ 
 
 
 class WelcomeCog(commands.Cog):
@@ -169,7 +169,7 @@ class WelcomeCog(commands.Cog):
                         self.selected_channel_id,
                         self.template,
                     )
-                embed = discord.Embed(title="Welcome settings saved", color=PURPLE)
+                embed = discord.Embed(title="Welcome settings saved", color=BRAND_COLOR)
                 if self.selected_channel_id:
                     ch = self.guild.get_channel(self.selected_channel_id)
                     if ch:
@@ -222,13 +222,12 @@ class WelcomeCog(commands.Cog):
             if isinstance(channel, (discord.TextChannel, discord.Thread)):
                 msg = template or "Welcome {user} to {guild}! We now have {membercount} members."
                 text = msg.format(user=member.mention, guild=member.guild.name, membercount=member.guild.member_count)
-                embed = discord.Embed(title=f"Welcome to {member.guild.name}!", description=text, color=PURPLE)
+                embed = discord.Embed(title=f"Welcome to {member.guild.name}!", description=text, color=BRAND_COLOR)
                 # Visuals
                 guild_icon = getattr(member.guild.icon, "url", None)
                 embed.set_author(name=str(member), icon_url=guild_icon)
                 if guild_icon:
                     embed.set_thumbnail(url=guild_icon)
-                    embed.set_image(url=guild_icon)
                 embed.add_field(name="Member", value=member.mention, inline=True)
                 embed.add_field(name="Member Count", value=str(member.guild.member_count), inline=True)
                 embed.timestamp = datetime.now(timezone.utc)

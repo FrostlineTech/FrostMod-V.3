@@ -52,5 +52,5 @@ __pypackages__/
 node_modules/
 
 # Database dumps/backups
-*.sql
 *.dump
+*.sql

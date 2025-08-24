@@ -23,9 +23,18 @@ class HelpCog(commands.Cog):
             value=(
                 "1) Configure Welcome: `/welcome setup` (choose channel + template)\n"
                 "2) Configure Leave: `/leave setup` (choose channel + template)\n"
-                "3) Configure Logs: `/logs` (select logs channel, toggle deleted message logging)\n"
+                "3) Configure Logs: `/logs` (select logs channel, toggle items incl. deletes/edits/joins)\n"
                 "4) Set Autorole: `/jrole <@role>` (ensure bot role is above the target)\n"
-                "5) Test diagnostics: `/status` and `/db`\n"
+                "5) Create a Poll: `/poll question:\"Your question\" options:\"A;B;C\" duration:10m` (admin only)\n"
+                "6) Test diagnostics: `/status` and `/db`\n"
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Public Info",
+            value=(
+                "- `/about` — About FrostMod, privacy, support link (ephemeral).\n"
+                "- `/commands` — Lists common member commands (ephemeral).\n"
             ),
             inline=False,
         )
@@ -35,6 +44,19 @@ class HelpCog(commands.Cog):
                 "Use `/logs` to open an interactive panel (Manage Server required). Choose a logs channel and toggle what gets logged.\n"
                 "Supported: Deleted messages, Message edits, Member joins/leaves; User changes — nickname, roles, avatar.\n"
                 "Note: Some features require Message Content intent and View Audit Log permission."
+            ),
+            inline=False,
+        )
+        embed.add_field(
+            name="Member Commands (Highlights)",
+            value=(
+                "- `/serverinfo` — Server stats.\n"
+                "- `/webstatus` — Check site status.\n"
+                "- `/activity` — User activity (week/month/all).\n"
+                "- `/avatar`, `/banner`, `/userinfo` — Quick user utilities.\n"
+                "- `/rps`, `/tictactoe`, `/connect4` — Mini games (buttons).\n"
+                "- `/meme`, `/caption` — Meme fun (random or captioned).\n"
+                "- `/dadjoke` — Lighten the mood."
             ),
             inline=False,
         )

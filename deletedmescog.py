@@ -17,7 +17,8 @@ from branding import BRAND_COLOR, FOOTER_TEXT
 class LogsConfigView(discord.ui.View):
     def __init__(self, *, guild: discord.Guild, pool, current_channel_id: int | None, log_msg_delete: bool,
                  log_nickname_change: bool = False, log_role_change: bool = False, log_avatar_change: bool = False,
-                 log_message_edit: bool = False, log_member_join: bool = False, log_member_leave: bool = False):
+                 log_message_edit: bool = False, log_member_join: bool = False, log_member_leave: bool = False,
+                 log_voice_join: bool = False, log_voice_leave: bool = False):
         super().__init__(timeout=180)
         self.guild = guild
         self.pool = pool
@@ -29,6 +30,8 @@ class LogsConfigView(discord.ui.View):
         self.state_log_message_edit = log_message_edit
         self.state_log_member_join = log_member_join
         self.state_log_member_leave = log_member_leave
+        self.state_log_voice_join = log_voice_join
+        self.state_log_voice_leave = log_voice_leave
 
         # Dynamic label for toggle button
         toggle_label = "Delete Log: ON" if log_msg_delete else "Delete Log: OFF"
@@ -52,6 +55,11 @@ class LogsConfigView(discord.ui.View):
                                         style=(discord.ButtonStyle.success if log_member_join else discord.ButtonStyle.secondary)))
         self.add_item(_ToggleLeaveButton(label=("Leave Log: ON" if log_member_leave else "Leave Log: OFF"),
                                          style=(discord.ButtonStyle.success if log_member_leave else discord.ButtonStyle.secondary)))
+        # Voice join/leave toggles
+        self.add_item(_ToggleVoiceJoinButton(label=("Voice Join Log: ON" if log_voice_join else "Voice Join Log: OFF"),
+                                             style=(discord.ButtonStyle.success if log_voice_join else discord.ButtonStyle.secondary)))
+        self.add_item(_ToggleVoiceLeaveButton(label=("Voice Leave Log: ON" if log_voice_leave else "Voice Leave Log: OFF"),
+                                              style=(discord.ButtonStyle.success if log_voice_leave else discord.ButtonStyle.secondary)))
         self.add_item(_SaveButton())
 
     async def save_to_db(self):
@@ -62,8 +70,8 @@ class LogsConfigView(discord.ui.View):
                 """
                 INSERT INTO general_server (guild_id, guild_name, logs_channel_id,
                                             log_message_delete, log_nickname_change, log_role_change, log_avatar_change,
-                                            log_message_edit, log_member_join, log_member_leave)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                            log_message_edit, log_member_join, log_member_leave, log_voice_join, log_voice_leave)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
                 ON CONFLICT (guild_id) DO UPDATE
                 SET guild_name = EXCLUDED.guild_name,
                     logs_channel_id = EXCLUDED.logs_channel_id,
@@ -73,7 +81,9 @@ class LogsConfigView(discord.ui.View):
                     log_avatar_change = EXCLUDED.log_avatar_change,
                     log_message_edit = EXCLUDED.log_message_edit,
                     log_member_join = EXCLUDED.log_member_join,
-                    log_member_leave = EXCLUDED.log_member_leave
+                    log_member_leave = EXCLUDED.log_member_leave,
+                    log_voice_join = EXCLUDED.log_voice_join,
+                    log_voice_leave = EXCLUDED.log_voice_leave
                 """,
                 self.guild.id,
                 self.guild.name,
@@ -85,6 +95,8 @@ class LogsConfigView(discord.ui.View):
                 self.state_log_message_edit,
                 self.state_log_member_join,
                 self.state_log_member_leave,
+                self.state_log_voice_join,
+                self.state_log_voice_leave,
             )
         return True
 
@@ -116,6 +128,30 @@ class _ToggleDeleteButton(discord.ui.Button):
         # Update button appearance
         self.label = "Delete Log: ON" if view.state_log_msg_delete else "Delete Log: OFF"
         self.style = discord.ButtonStyle.success if view.state_log_msg_delete else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleVoiceJoinButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=4)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_voice_join = not view.state_log_voice_join
+        self.label = "Voice Join Log: ON" if view.state_log_voice_join else "Voice Join Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_voice_join else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleVoiceLeaveButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=4)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_voice_leave = not view.state_log_voice_leave
+        self.label = "Voice Leave Log: ON" if view.state_log_voice_leave else "Voice Leave Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_voice_leave else discord.ButtonStyle.secondary
         await interaction.response.edit_message(view=view)
 
 
@@ -287,12 +323,14 @@ class DeletedMessageLogger(commands.Cog):
         log_edit = False
         log_join = False
         log_leave = False
+        log_vjoin = False
+        log_vleave = False
 
         # Load current settings if available
         if pool:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT logs_channel_id, log_message_delete, log_nickname_change, log_role_change, log_avatar_change, log_message_edit, log_member_join, log_member_leave FROM general_server WHERE guild_id = $1",
+                    "SELECT logs_channel_id, log_message_delete, log_nickname_change, log_role_change, log_avatar_change, log_message_edit, log_member_join, log_member_leave, log_voice_join, log_voice_leave FROM general_server WHERE guild_id = $1",
                     guild.id,
                 )
                 if row:
@@ -304,6 +342,8 @@ class DeletedMessageLogger(commands.Cog):
                     log_edit = row["log_message_edit"]
                     log_join = row["log_member_join"]
                     log_leave = row["log_member_leave"]
+                    log_vjoin = row["log_voice_join"]
+                    log_vleave = row["log_voice_leave"]
 
         view = LogsConfigView(
             guild=guild,
@@ -316,6 +356,8 @@ class DeletedMessageLogger(commands.Cog):
             log_message_edit=log_edit,
             log_member_join=log_join,
             log_member_leave=log_leave,
+            log_voice_join=log_vjoin,
+            log_voice_leave=log_vleave,
         )
 
         embed = discord.Embed(title="Logs Configuration", color=BRAND_COLOR)
@@ -331,6 +373,8 @@ class DeletedMessageLogger(commands.Cog):
         embed.add_field(name="Log Avatar Changes", value="Enabled" if log_avatar else "Disabled", inline=True)
         embed.add_field(name="Log Joins", value="Enabled" if log_join else "Disabled", inline=True)
         embed.add_field(name="Log Leaves", value="Enabled" if log_leave else "Disabled", inline=True)
+        embed.add_field(name="Log Voice Joins", value="Enabled" if log_vjoin else "Disabled", inline=True)
+        embed.add_field(name="Log Voice Leaves", value="Enabled" if log_vleave else "Disabled", inline=True)
         embed.set_footer(text=FOOTER_TEXT)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 

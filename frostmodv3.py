@@ -41,6 +41,8 @@ def main() -> None:
     intents = discord.Intents.default()
     intents.message_content = True  # Needed if you later read message content
     intents.members = True  # For member join/leave features later
+    intents.voice_states = True  # For voice join/leave tracking
+    intents.presences = True  # For activity tracking
 
     bot = commands.Bot(command_prefix="!", intents=intents)
     bot.log = logging.getLogger("frostmod")
@@ -56,7 +58,8 @@ def main() -> None:
             bot.log.info("[EXT] Loaded extension: purgecog")
         except Exception as e:
             bot.log.warning(f"Failed to load extension 'purgecog': {e}")
-        for ext in ("Welcomecog", "Leavecog", "autorolecog", "help", "Webserver", "rules", "deletedmescog", "usrchangcog", "dbcheckcog", "statuscog", "serverinfocog"):
+        for ext in ("Welcomecog", "Leavecog", "autorolecog", "help", "Webserver", "rules", "deletedmescog", "usrchangcog", "dbcheckcog", "statuscog", "serverinfocog",
+                    "dadjokecog", "voicejoincog", "voiceleavecog", "Activtycog", "publicinfo", "polls", "utilityimages", "minigames", "memes"):
             try:
                 await bot.load_extension(ext)
                 bot.log.info(f"[EXT] Loaded extension: {ext}")
@@ -101,7 +104,15 @@ def main() -> None:
             leave_message TEXT,
             -- New logging settings (present for fresh installs)
             logs_channel_id BIGINT,
-            log_message_delete BOOLEAN NOT NULL DEFAULT FALSE
+            log_message_delete BOOLEAN NOT NULL DEFAULT FALSE,
+            log_nickname_change BOOLEAN NOT NULL DEFAULT FALSE,
+            log_role_change BOOLEAN NOT NULL DEFAULT FALSE,
+            log_avatar_change BOOLEAN NOT NULL DEFAULT FALSE,
+            log_message_edit BOOLEAN NOT NULL DEFAULT FALSE,
+            log_member_join BOOLEAN NOT NULL DEFAULT FALSE,
+            log_member_leave BOOLEAN NOT NULL DEFAULT FALSE,
+            log_voice_join BOOLEAN NOT NULL DEFAULT FALSE,
+            log_voice_leave BOOLEAN NOT NULL DEFAULT FALSE
         );
 
         CREATE TABLE IF NOT EXISTS user_joins (
@@ -133,6 +144,36 @@ def main() -> None:
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_message_edit BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_member_join BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_member_leave BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_voice_join BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_voice_leave BOOLEAN NOT NULL DEFAULT FALSE;
+
+        -- Activity tracking
+        CREATE TABLE IF NOT EXISTS user_activity (
+            guild_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            messages_sent BIGINT NOT NULL DEFAULT 0,
+            voice_joins BIGINT NOT NULL DEFAULT 0,
+            voice_seconds BIGINT NOT NULL DEFAULT 0,
+            last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_text_channel_id BIGINT,
+            last_voice_channel_id BIGINT,
+            PRIMARY KEY (guild_id, user_id)
+        );
+
+        -- Daily rollups for activity (used by /activity period views and rankings)
+        CREATE TABLE IF NOT EXISTS user_activity_daily (
+            guild_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            day DATE NOT NULL,
+            messages BIGINT NOT NULL DEFAULT 0,
+            voice_joins BIGINT NOT NULL DEFAULT 0,
+            voice_seconds BIGINT NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id, day)
+        );
+
+        -- Idempotent migrations to ensure columns exist on older installs
+        ALTER TABLE user_activity ADD COLUMN IF NOT EXISTS last_text_channel_id BIGINT;
+        ALTER TABLE user_activity ADD COLUMN IF NOT EXISTS last_voice_channel_id BIGINT;
         COMMIT;
         """
         async with bot.pool.acquire() as conn:
