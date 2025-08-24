@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from branding import BRAND_COLOR, FOOTER_TEXT
+from ui import make_embed, CopyIdButton
 
 
 class UtilityImages(commands.Cog):
@@ -17,17 +18,16 @@ class UtilityImages(commands.Cog):
     @app_commands.describe(user="Target user (optional)")
     async def avatar(self, interaction: discord.Interaction, user: discord.User | None = None):
         user = user or interaction.user
-        embed = discord.Embed(title=f"{user} — Avatar", color=BRAND_COLOR)
+        embed = make_embed(title=f"{user} — Avatar", color=BRAND_COLOR, interaction=interaction, author_user=user)
         if user.avatar:
             embed.set_image(url=user.avatar.url)
         else:
-            embed.description = "No custom avatar. Showing default."  # Discord may still show default
-        embed.set_footer(text=FOOTER_TEXT)
+            embed.description = "No custom avatar. Showing default."
 
         view = discord.ui.View()
         if user.avatar:
             view.add_item(discord.ui.Button(label="Open", url=user.avatar.url))
-        view.add_item(_CopyIdButton(user_id=user.id))
+        view.add_item(CopyIdButton(id_to_copy=user.id))
         await interaction.response.send_message(embed=embed, view=view)
 
     @app_commands.command(name="banner", description="Show a user's banner (if available)")
@@ -40,17 +40,16 @@ class UtilityImages(commands.Cog):
         except Exception:
             fetched = user
         banner = getattr(fetched, "banner", None)
-        embed = discord.Embed(title=f"{user} — Banner", color=BRAND_COLOR)
+        embed = make_embed(title=f"{user} — Banner", color=BRAND_COLOR, interaction=interaction, author_user=user)
         if banner:
             embed.set_image(url=banner.url)
         else:
             embed.description = "No banner set."
-        embed.set_footer(text=FOOTER_TEXT)
 
         view = discord.ui.View()
         if banner:
             view.add_item(discord.ui.Button(label="Open", url=banner.url))
-        view.add_item(_CopyIdButton(user_id=user.id))
+        view.add_item(CopyIdButton(id_to_copy=user.id))
         await interaction.response.send_message(embed=embed, view=view)
 
     @app_commands.command(name="userinfo", description="Show basic info about a user")
@@ -66,7 +65,7 @@ class UtilityImages(commands.Cog):
             except Exception:
                 pass
 
-        embed = discord.Embed(title=f"User Info — {member}", color=BRAND_COLOR)
+        embed = make_embed(title=f"User Info — {member}", color=BRAND_COLOR, interaction=interaction, author_user=member)
         if member.avatar:
             embed.set_thumbnail(url=member.avatar.url)
         embed.add_field(name="ID", value=str(member.id), inline=True)
@@ -75,7 +74,6 @@ class UtilityImages(commands.Cog):
         if isinstance(member, discord.Member):
             embed.add_field(name="Top Role", value=getattr(member.top_role, 'mention', 'None'), inline=True)
             embed.add_field(name="Roles", value=str(len(member.roles)-1), inline=True)
-        embed.set_footer(text=FOOTER_TEXT)
 
         view = discord.ui.View()
         if member.avatar:
@@ -89,18 +87,9 @@ class UtilityImages(commands.Cog):
             pass
         if banner_url:
             view.add_item(discord.ui.Button(label="Open Banner", url=banner_url))
-        view.add_item(_CopyIdButton(user_id=member.id))
+        view.add_item(CopyIdButton(id_to_copy=member.id))
 
         await interaction.response.send_message(embed=embed, view=view)
-
-
-class _CopyIdButton(discord.ui.Button):
-    def __init__(self, user_id: int):
-        super().__init__(label="Copy ID", style=discord.ButtonStyle.secondary)
-        self.user_id = user_id
-
-    async def callback(self, interaction: discord.Interaction):
-        await interaction.response.send_message(f"User ID: `{self.user_id}`", ephemeral=True)
 
 
 async def setup(bot: commands.Bot) -> None:

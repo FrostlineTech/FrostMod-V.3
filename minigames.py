@@ -5,6 +5,7 @@ from typing import Optional
 
 import discord
 from discord import app_commands
+from discord.app_commands import checks
 from discord.ext import commands
 
 from branding import BRAND_COLOR, FOOTER_TEXT
@@ -220,6 +221,7 @@ class MiniGamesCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="rps", description="Play Rock-Paper-Scissors vs the bot (buttons)")
+    @checks.cooldown(1, 5.0)
     async def rps(self, interaction: discord.Interaction):
         view = RPSView()
         embed = discord.Embed(title="Rock • Paper • Scissors", description="Pick one!", color=BRAND_COLOR)
@@ -229,6 +231,7 @@ class MiniGamesCog(commands.Cog):
     @app_commands.command(name="tictactoe", description="Start TicTacToe vs another member")
     @app_commands.describe(opponent="The member to challenge")
     @app_commands.guild_only()
+    @checks.cooldown(1, 10.0)
     async def tictactoe(self, interaction: discord.Interaction, opponent: discord.Member):
         if opponent.bot:
             await interaction.response.send_message("Please challenge a human member.", ephemeral=True)
@@ -241,6 +244,7 @@ class MiniGamesCog(commands.Cog):
     @app_commands.command(name="connect4", description="Start Connect 4 vs another member")
     @app_commands.describe(opponent="The member to challenge")
     @app_commands.guild_only()
+    @checks.cooldown(1, 10.0)
     async def connect4(self, interaction: discord.Interaction, opponent: discord.Member):
         if opponent.bot:
             await interaction.response.send_message("Please challenge a human member.", ephemeral=True)

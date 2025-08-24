@@ -3,6 +3,7 @@ from __future__ import annotations
 import aiohttp
 import discord
 from discord import app_commands
+from discord.app_commands import checks
 from discord.ext import commands
 
 from branding import BRAND_COLOR, FOOTER_TEXT
@@ -15,6 +16,7 @@ class MemesCog(commands.Cog):
         self.bot = bot
 
     @app_commands.command(name="meme", description="Grab a random meme")
+    @checks.cooldown(1, 5.0)  # 1 use per 5 seconds per user
     async def meme(self, interaction: discord.Interaction):
         await interaction.response.defer(thinking=True)
         title = "Random Meme"
@@ -41,6 +43,7 @@ class MemesCog(commands.Cog):
 
     @app_commands.command(name="caption", description="Create a simple captioned embed for an image (top;bottom)")
     @app_commands.describe(image_url="URL to the image", text="Caption text, format: top;bottom")
+    @checks.cooldown(1, 10.0)  # avoid abuse
     async def caption(self, interaction: discord.Interaction, image_url: str, text: str):
         top, bottom = parse_caption(text)
         embed = discord.Embed(title=top or " ", description=bottom or None, color=BRAND_COLOR)

@@ -1,6 +1,6 @@
-#welcome cog ensure this cog is registered in the molls.py file
-#ensure all embeds say powered by FSLLC / FrostlineSolutions.com at the bottom of the embed in the footer
-#ensure all embeds are color purple (0x8e00ff)
+# Welcome cog — ensure this cog is registered in the main bot loader
+# Ensure all embeds say "Powered by Frostline Solutions LLC / frostlinesolutions.com" in the footer
+# Ensure all embeds use cobalt blue BRAND_COLOR (0x0047AB)
 
 from __future__ import annotations
 
@@ -91,8 +91,9 @@ class WelcomeCog(commands.Cog):
                     current_message = row["welcome_message"]
 
         class TemplateModal(discord.ui.Modal, title="Edit Welcome Template"):
-            def __init__(self, default: str | None = None):
+            def __init__(self, parent_view: "WelcomeSetupView", default: str | None = None):
                 super().__init__()
+                self.parent_view = parent_view
                 self.template = discord.ui.TextInput(
                     label="Template",
                     style=discord.TextStyle.paragraph,
@@ -103,8 +104,10 @@ class WelcomeCog(commands.Cog):
                 self.add_item(self.template)
 
             async def on_submit(self, modal_interaction: discord.Interaction):
+                # Update the parent view's template directly
+                self.parent_view.template = str(self.template.value)
                 await modal_interaction.response.send_message(
-                    f"Template updated in editor (not saved yet).",
+                    "Template updated in editor (not saved yet).",
                     ephemeral=True,
                 )
 
@@ -130,19 +133,8 @@ class WelcomeCog(commands.Cog):
 
             @discord.ui.button(label="Edit Template", style=discord.ButtonStyle.primary)
             async def edit_template(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                modal = TemplateModal(default=self.template)
+                modal = TemplateModal(self, default=self.template)
                 await button_interaction.response.send_modal(modal)
-                try:
-                    modal_inter: discord.Interaction = await self.parent.bot.wait_for(
-                        "interaction",
-                        check=lambda i: isinstance(i, discord.Interaction) and i.user.id == button_interaction.user.id and i.type.name == "modal_submit",
-                        timeout=120,
-                    )
-                    # Update local template from modal
-                    # modal.children[0] is the TextInput
-                    self.template = str(modal.children[0].value) if modal.children else self.template
-                except Exception:
-                    pass
 
             @discord.ui.button(label="Save", style=discord.ButtonStyle.success)
             async def save(self, save_interaction: discord.Interaction, button: discord.ui.Button):
@@ -179,6 +171,16 @@ class WelcomeCog(commands.Cog):
                     embed.add_field(name="Template", value=preview or "(unchanged)", inline=False)
                 embed.set_footer(text=FOOTER_TEXT)
                 await save_interaction.response.send_message(embed=embed, ephemeral=True)
+
+            @discord.ui.button(label="Preview", style=discord.ButtonStyle.secondary)
+            async def preview(self, inter: discord.Interaction, button: discord.ui.Button):
+                # Render a preview using the invoking user and current guild
+                membercount = inter.guild.member_count if inter.guild else 0
+                sample = (self.template or "Welcome {user} to {guild}! We now have {membercount} members.")
+                text = sample.format(user=inter.user.mention, guild=(inter.guild.name if inter.guild else "Guild"), membercount=membercount)
+                embed = discord.Embed(title="Welcome Preview", description=text, color=BRAND_COLOR)
+                embed.set_footer(text=FOOTER_TEXT)
+                await inter.response.send_message(embed=embed, ephemeral=True)
 
             @discord.ui.button(label="Cancel", style=discord.ButtonStyle.secondary)
             async def cancel(self, cancel_interaction: discord.Interaction, button: discord.ui.Button):

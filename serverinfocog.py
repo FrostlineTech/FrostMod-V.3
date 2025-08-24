@@ -12,6 +12,7 @@ from discord.ext import commands
 from datetime import timezone
 
 from branding import BRAND_COLOR, FOOTER_TEXT
+from ui import make_embed, CopyIdButton
 
 
 class ServerInfo(commands.Cog):
@@ -45,7 +46,7 @@ class ServerInfo(commands.Cog):
         except Exception:
             owner = None
 
-        embed = discord.Embed(title=f"Server Info — {name}", color=BRAND_COLOR)
+        embed = make_embed(title=f"Server Info — {name}", color=BRAND_COLOR, interaction=interaction)
         if guild.icon:
             embed.set_thumbnail(url=guild.icon.url)
         embed.add_field(name="Name", value=name, inline=True)
@@ -57,9 +58,9 @@ class ServerInfo(commands.Cog):
         embed.add_field(name="Roles", value=str(roles), inline=True)
         embed.add_field(name="Emojis", value=str(emojis), inline=True)
         embed.add_field(name="Created", value=discord.utils.format_dt(created_at, style="F"), inline=False)
-        embed.set_footer(text=FOOTER_TEXT)
-
-        await interaction.response.send_message(embed=embed)
+        view = discord.ui.View()
+        view.add_item(CopyIdButton(gid, label="Copy Server ID"))
+        await interaction.response.send_message(embed=embed, view=view)
 
 
 async def setup(bot: commands.Bot):

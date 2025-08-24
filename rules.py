@@ -44,8 +44,9 @@ class RulesCog(commands.Cog):
             return
 
         class TemplateModal(discord.ui.Modal, title="Edit Rules Template"):
-            def __init__(self, default: str | None = None):
+            def __init__(self, parent_view: "RulesSetupView", default: str | None = None):
                 super().__init__()
+                self.parent_view = parent_view
                 self.template = discord.ui.TextInput(
                     label="Rules Content",
                     style=discord.TextStyle.paragraph,
@@ -56,6 +57,8 @@ class RulesCog(commands.Cog):
                 self.add_item(self.template)
 
             async def on_submit(self, modal_interaction: discord.Interaction):
+                # Write directly to the setup view state
+                self.parent_view.template = str(self.template.value)
                 await modal_interaction.response.send_message(
                     "Template updated in editor (not posted yet).",
                     ephemeral=True,
@@ -83,20 +86,17 @@ class RulesCog(commands.Cog):
 
             @discord.ui.button(label="Edit Template", style=discord.ButtonStyle.primary)
             async def edit_template(self, button_interaction: discord.Interaction, button: discord.ui.Button):
-                modal = TemplateModal(default=self.template)
+                modal = TemplateModal(self, default=self.template)
                 await button_interaction.response.send_modal(modal)
-                try:
-                    modal_inter: discord.Interaction = await self.parent.bot.wait_for(
-                        "interaction",
-                        check=lambda i: isinstance(i, discord.Interaction)
-                        and i.user.id == button_interaction.user.id
-                        and i.type.name == "modal_submit",
-                        timeout=180,
-                    )
-                    # Update from modal
-                    self.template = str(modal.children[0].value) if modal.children else self.template
-                except Exception:
-                    pass
+                # No wait_for; TemplateModal.on_submit updates self.template directly
+
+            @discord.ui.button(label="Preview", style=discord.ButtonStyle.secondary)
+            async def preview(self, preview_interaction: discord.Interaction, _: discord.ui.Button):
+                content = (self.template or DEFAULT_TEMPLATE).format(guild=self.guild.name)
+                embed = discord.Embed(title=f"{self.guild.name} • Server Rules (Preview)", description=content, color=BRAND_COLOR)
+                embed.set_footer(text=FOOTER_TEXT)
+                embed.timestamp = datetime.now(timezone.utc)
+                await preview_interaction.response.send_message(embed=embed, ephemeral=True)
 
             @discord.ui.button(label="Save & Post", style=discord.ButtonStyle.success)
             async def save(self, save_interaction: discord.Interaction, button: discord.ui.Button):
@@ -113,8 +113,26 @@ class RulesCog(commands.Cog):
                 embed.set_footer(text=FOOTER_TEXT)
                 embed.timestamp = datetime.now(timezone.utc)
                 try:
-                    await ch.send(embed=embed)
+                    msg = await ch.send(embed=embed)
                     await save_interaction.response.edit_message(content=f"Rules posted to {ch.mention}.", view=None)
+                    # Offer Undo for 10 minutes
+                    class UndoView(discord.ui.View):
+                        def __init__(self, message: discord.Message):
+                            super().__init__(timeout=600)
+                            self.message = message
+
+                        @discord.ui.button(label="Undo", style=discord.ButtonStyle.danger)
+                        async def undo(self, undo_interaction: discord.Interaction, _: discord.ui.Button):
+                            try:
+                                await self.message.delete()
+                                await undo_interaction.response.edit_message(content="Rules post deleted.", view=None)
+                            except discord.Forbidden:
+                                await undo_interaction.response.send_message("I can't delete that message.", ephemeral=True)
+                            except Exception:
+                                await undo_interaction.response.send_message("Failed to delete the rules message.", ephemeral=True)
+
+                    undo_view = UndoView(msg)
+                    await save_interaction.followup.send(content=f"Posted in {ch.mention}. You can undo within 10 minutes.", view=undo_view, ephemeral=True)
                 except discord.Forbidden:
                     await save_interaction.response.send_message("I don't have permission to post in that channel.", ephemeral=True)
                 except Exception as e:

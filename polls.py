@@ -39,14 +39,17 @@ class PollState:
 
 
 class PollView(discord.ui.View):
-    def __init__(self, state: PollState):
+    def __init__(self, state: PollState, *, message_id: int):
         super().__init__(timeout=None)
         self.state = state
+        self.message_id = message_id
         # Create a button per option (Discord allows up to 25 components; we limit options)
         for idx, label in enumerate(state.options):
-            self.add_item(PollButton(idx=idx, label=label))
+            self.add_item(PollButton(idx=idx, label=label, message_id=message_id))
         # Add a results refresh button
-        self.add_item(RefreshButton())
+        self.add_item(RefreshButton(message_id=message_id))
+        # Add an End Poll button (admin only control, but we'll permission-check in callback)
+        self.add_item(EndPollButton(message_id=message_id))
 
     async def on_timeout(self):
         # We don't rely on view timeout; closing handled by task
@@ -54,9 +57,10 @@ class PollView(discord.ui.View):
 
 
 class PollButton(discord.ui.Button):
-    def __init__(self, idx: int, label: str):
-        super().__init__(label=label, style=discord.ButtonStyle.primary)
+    def __init__(self, idx: int, label: str, *, message_id: int):
+        super().__init__(label=label, style=discord.ButtonStyle.primary, custom_id=f"poll:{message_id}:opt:{idx}")
         self.idx = idx
+        self._message_id = message_id
 
     async def callback(self, interaction: discord.Interaction):
         view: PollView = self.view  # type: ignore
@@ -64,27 +68,86 @@ class PollButton(discord.ui.Button):
         if state.closed:
             await interaction.response.send_message("This poll has closed.", ephemeral=True)
             return
-        # Record/replace vote
+        # Record/replace vote (in-memory)
         prev = state.votes.get(interaction.user.id)
         state.votes[interaction.user.id] = self.idx
         changed = "changed" if prev is not None and prev != self.idx else "recorded"
         await interaction.response.send_message(f"Your vote has been {changed}.", ephemeral=True)
+        # Persist vote to DB if available
+        bot = interaction.client  # commands.Bot
+        pool = getattr(bot, "pool", None)
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO polls_votes (message_id, user_id, option_idx)
+                        VALUES ($1,$2,$3)
+                        ON CONFLICT (message_id, user_id) DO UPDATE SET option_idx=EXCLUDED.option_idx
+                        """,
+                        self._message_id,
+                        interaction.user.id,
+                        self.idx,
+                    )
+            except Exception:
+                pass
         # Optionally update message with new tallies (lightweight refresh; avoid rate limits)
         try:
-            if state.message_id and interaction.channel:
-                msg = await interaction.channel.fetch_message(state.message_id)
+            if self._message_id and interaction.channel:
+                msg = await interaction.channel.fetch_message(self._message_id)
                 await msg.edit(embed=build_poll_embed(state))
         except Exception:
             pass
 
 
 class RefreshButton(discord.ui.Button):
-    def __init__(self):
-        super().__init__(label="Refresh", style=discord.ButtonStyle.secondary)
+    def __init__(self, *, message_id: int):
+        super().__init__(label="Refresh", style=discord.ButtonStyle.secondary, custom_id=f"poll:{message_id}:refresh")
 
     async def callback(self, interaction: discord.Interaction):
         view: PollView = self.view  # type: ignore
         await interaction.response.edit_message(embed=build_poll_embed(view.state), view=view)
+
+
+class EndPollButton(discord.ui.Button):
+    def __init__(self, *, message_id: int):
+        super().__init__(label="End Poll", style=discord.ButtonStyle.danger, custom_id=f"poll:{message_id}:end")
+        self._message_id = message_id
+
+    async def callback(self, interaction: discord.Interaction):
+        # Permission check: manage_guild required
+        if not interaction.guild or not interaction.user.guild_permissions.manage_guild:
+            await interaction.response.send_message("You need Manage Server to end this poll.", ephemeral=True)
+            return
+        view: PollView = self.view  # type: ignore
+        state = view.state
+        if state.closed:
+            await interaction.response.send_message("Poll already closed.", ephemeral=True)
+            return
+        state.closed = True
+        # Disable all buttons
+        for item in list(view.children):
+            if isinstance(item, discord.ui.Button):
+                item.disabled = True
+        # Persist closed state
+        bot = interaction.client
+        pool = getattr(bot, "pool", None)
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute("UPDATE polls_active SET closed=TRUE WHERE message_id=$1", self._message_id)
+            except Exception:
+                pass
+        # Edit message
+        try:
+            await interaction.response.edit_message(embed=build_poll_embed(state), view=view)
+        except Exception:
+            try:
+                if interaction.channel:
+                    msg = await interaction.channel.fetch_message(self._message_id)
+                    await msg.edit(embed=build_poll_embed(state), view=view)
+            except Exception:
+                pass
 
 
 def build_poll_embed(state: PollState) -> discord.Embed:
@@ -138,14 +201,36 @@ class PollsCog(commands.Cog):
             return
 
         state = PollState(question=question.strip(), options=opts, votes={})
-        view = PollView(state)
         embed = build_poll_embed(state)
-        await interaction.response.send_message(embed=embed, view=view)
-        try:
-            sent = await interaction.original_response()
-            state.message_id = sent.id
-        except Exception:
-            pass
+        # Send without view first to get the message id for deterministic custom_ids
+        await interaction.response.send_message(embed=embed)
+        sent = await interaction.original_response()
+        state.message_id = sent.id
+        view = PollView(state, message_id=sent.id)
+        # Attach the view now
+        await sent.edit(embed=embed, view=view)
+
+        # Persist the poll meta and initialize storage
+        bot = interaction.client
+        pool = getattr(bot, "pool", None)
+        if pool:
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        """
+                        INSERT INTO polls_active (message_id, channel_id, guild_id, question, options, closed)
+                        VALUES ($1,$2,$3,$4,$5,$6)
+                        ON CONFLICT (message_id) DO UPDATE SET question=EXCLUDED.question, options=EXCLUDED.options, closed=EXCLUDED.closed
+                        """,
+                        sent.id,
+                        interaction.channel_id,
+                        interaction.guild_id or 0,
+                        state.question,
+                        opts,
+                        False,
+                    )
+            except Exception:
+                pass
 
         async def closer():
             await asyncio.sleep(seconds)
@@ -159,9 +244,56 @@ class PollsCog(commands.Cog):
                 await sent.edit(embed=build_poll_embed(state), view=view)
             except Exception:
                 pass
+            # Persist closed
+            pool = getattr(self.bot, "pool", None)
+            if pool:
+                try:
+                    async with pool.acquire() as conn:
+                        await conn.execute("UPDATE polls_active SET closed=TRUE WHERE message_id=$1", sent.id)
+                except Exception:
+                    pass
 
         asyncio.create_task(closer())
 
+    @poll.autocomplete("duration")
+    async def duration_autocomplete(self, interaction: discord.Interaction, current: str):
+        suggestions = [
+            ("30 seconds", "30s"),
+            ("1 minute", "1m"),
+            ("5 minutes", "5m"),
+            ("10 minutes", "10m"),
+            ("30 minutes", "30m"),
+            ("1 hour", "1h"),
+        ]
+        cur = current.lower().strip()
+        filtered = [s for s in suggestions if cur in s[1] or cur in s[0].lower()]
+        return [app_commands.Choice(name=name, value=value) for name, value in (filtered or suggestions)][:25]
+
+    async def restore_active_polls(self):
+        pool = getattr(self.bot, "pool", None)
+        if not pool:
+            return
+        try:
+            async with pool.acquire() as conn:
+                rows = await conn.fetch("SELECT message_id, channel_id, guild_id, question, options, closed FROM polls_active WHERE closed=FALSE")
+                for row in rows:
+                    message_id = row["message_id"]
+                    channel_id = row["channel_id"]
+                    guild_id = row["guild_id"]
+                    question = row["question"]
+                    options = list(row["options"]) if row["options"] is not None else []
+                    # Rebuild votes
+                    votes_rows = await conn.fetch("SELECT user_id, option_idx FROM polls_votes WHERE message_id=$1", message_id)
+                    votes = {int(r["user_id"]): int(r["option_idx"]) for r in votes_rows}
+                    state = PollState(question=question, options=options, votes=votes, message_id=message_id, closed=False)
+                    # Register a persistent view for this message id
+                    self.bot.add_view(PollView(state, message_id=message_id), message_id=message_id)
+        except Exception:
+            pass
+
 
 async def setup(bot: commands.Bot) -> None:
-    await bot.add_cog(PollsCog(bot))
+    cog = PollsCog(bot)
+    await bot.add_cog(cog)
+    # Attempt to restore active polls
+    await cog.restore_active_polls()

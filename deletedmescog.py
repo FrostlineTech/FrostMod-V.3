@@ -18,7 +18,10 @@ class LogsConfigView(discord.ui.View):
     def __init__(self, *, guild: discord.Guild, pool, current_channel_id: int | None, log_msg_delete: bool,
                  log_nickname_change: bool = False, log_role_change: bool = False, log_avatar_change: bool = False,
                  log_message_edit: bool = False, log_member_join: bool = False, log_member_leave: bool = False,
-                 log_voice_join: bool = False, log_voice_leave: bool = False):
+                 log_voice_join: bool = False, log_voice_leave: bool = False,
+                 log_bulk_delete: bool = False,
+                 log_channel_create: bool = False, log_channel_delete: bool = False, log_channel_update: bool = False,
+                 log_thread_create: bool = False, log_thread_delete: bool = False, log_thread_update: bool = False):
         super().__init__(timeout=180)
         self.guild = guild
         self.pool = pool
@@ -32,6 +35,14 @@ class LogsConfigView(discord.ui.View):
         self.state_log_member_leave = log_member_leave
         self.state_log_voice_join = log_voice_join
         self.state_log_voice_leave = log_voice_leave
+        # Expanded toggles
+        self.state_log_bulk_delete = log_bulk_delete
+        self.state_log_channel_create = log_channel_create
+        self.state_log_channel_delete = log_channel_delete
+        self.state_log_channel_update = log_channel_update
+        self.state_log_thread_create = log_thread_create
+        self.state_log_thread_delete = log_thread_delete
+        self.state_log_thread_update = log_thread_update
 
         # Dynamic label for toggle button
         toggle_label = "Delete Log: ON" if log_msg_delete else "Delete Log: OFF"
@@ -60,6 +71,21 @@ class LogsConfigView(discord.ui.View):
                                              style=(discord.ButtonStyle.success if log_voice_join else discord.ButtonStyle.secondary)))
         self.add_item(_ToggleVoiceLeaveButton(label=("Voice Leave Log: ON" if log_voice_leave else "Voice Leave Log: OFF"),
                                               style=(discord.ButtonStyle.success if log_voice_leave else discord.ButtonStyle.secondary)))
+        # Expanded: bulk delete and channel/thread events
+        self.add_item(_ToggleBulkDeleteButton(label=("Bulk Delete Log: ON" if log_bulk_delete else "Bulk Delete Log: OFF"),
+                                              style=(discord.ButtonStyle.success if log_bulk_delete else discord.ButtonStyle.secondary)))
+        self.add_item(_ToggleChanCreateButton(label=("Channel Create Log: ON" if log_channel_create else "Channel Create Log: OFF"),
+                                              style=(discord.ButtonStyle.success if log_channel_create else discord.ButtonStyle.secondary)))
+        self.add_item(_ToggleChanDeleteButton(label=("Channel Delete Log: ON" if log_channel_delete else "Channel Delete Log: OFF"),
+                                              style=(discord.ButtonStyle.success if log_channel_delete else discord.ButtonStyle.secondary)))
+        self.add_item(_ToggleChanUpdateButton(label=("Channel Update Log: ON" if log_channel_update else "Channel Update Log: OFF"),
+                                              style=(discord.ButtonStyle.success if log_channel_update else discord.ButtonStyle.secondary)))
+        self.add_item(_ToggleThreadCreateButton(label=("Thread Create Log: ON" if log_thread_create else "Thread Create Log: OFF"),
+                                                style=(discord.ButtonStyle.success if log_thread_create else discord.ButtonStyle.secondary)))
+        self.add_item(_ToggleThreadDeleteButton(label=("Thread Delete Log: ON" if log_thread_delete else "Thread Delete Log: OFF"),
+                                                style=(discord.ButtonStyle.success if log_thread_delete else discord.ButtonStyle.secondary)))
+        self.add_item(_ToggleThreadUpdateButton(label=("Thread Update Log: ON" if log_thread_update else "Thread Update Log: OFF"),
+                                                style=(discord.ButtonStyle.success if log_thread_update else discord.ButtonStyle.secondary)))
         self.add_item(_SaveButton())
 
     async def save_to_db(self):
@@ -70,8 +96,10 @@ class LogsConfigView(discord.ui.View):
                 """
                 INSERT INTO general_server (guild_id, guild_name, logs_channel_id,
                                             log_message_delete, log_nickname_change, log_role_change, log_avatar_change,
-                                            log_message_edit, log_member_join, log_member_leave, log_voice_join, log_voice_leave)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                                            log_message_edit, log_member_join, log_member_leave, log_voice_join, log_voice_leave,
+                                            log_bulk_delete, log_channel_create, log_channel_delete, log_channel_update,
+                                            log_thread_create, log_thread_delete, log_thread_update)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
                 ON CONFLICT (guild_id) DO UPDATE
                 SET guild_name = EXCLUDED.guild_name,
                     logs_channel_id = EXCLUDED.logs_channel_id,
@@ -83,7 +111,14 @@ class LogsConfigView(discord.ui.View):
                     log_member_join = EXCLUDED.log_member_join,
                     log_member_leave = EXCLUDED.log_member_leave,
                     log_voice_join = EXCLUDED.log_voice_join,
-                    log_voice_leave = EXCLUDED.log_voice_leave
+                    log_voice_leave = EXCLUDED.log_voice_leave,
+                    log_bulk_delete = EXCLUDED.log_bulk_delete,
+                    log_channel_create = EXCLUDED.log_channel_create,
+                    log_channel_delete = EXCLUDED.log_channel_delete,
+                    log_channel_update = EXCLUDED.log_channel_update,
+                    log_thread_create = EXCLUDED.log_thread_create,
+                    log_thread_delete = EXCLUDED.log_thread_delete,
+                    log_thread_update = EXCLUDED.log_thread_update
                 """,
                 self.guild.id,
                 self.guild.name,
@@ -97,6 +132,13 @@ class LogsConfigView(discord.ui.View):
                 self.state_log_member_leave,
                 self.state_log_voice_join,
                 self.state_log_voice_leave,
+                self.state_log_bulk_delete,
+                self.state_log_channel_create,
+                self.state_log_channel_delete,
+                self.state_log_channel_update,
+                self.state_log_thread_create,
+                self.state_log_thread_delete,
+                self.state_log_thread_update,
             )
         return True
 
@@ -128,6 +170,90 @@ class _ToggleDeleteButton(discord.ui.Button):
         # Update button appearance
         self.label = "Delete Log: ON" if view.state_log_msg_delete else "Delete Log: OFF"
         self.style = discord.ButtonStyle.success if view.state_log_msg_delete else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleBulkDeleteButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_bulk_delete = not view.state_log_bulk_delete
+        self.label = "Bulk Delete Log: ON" if view.state_log_bulk_delete else "Bulk Delete Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_bulk_delete else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleChanCreateButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_channel_create = not view.state_log_channel_create
+        self.label = "Channel Create Log: ON" if view.state_log_channel_create else "Channel Create Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_channel_create else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleChanDeleteButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=2)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_channel_delete = not view.state_log_channel_delete
+        self.label = "Channel Delete Log: ON" if view.state_log_channel_delete else "Channel Delete Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_channel_delete else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleChanUpdateButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=3)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_channel_update = not view.state_log_channel_update
+        self.label = "Channel Update Log: ON" if view.state_log_channel_update else "Channel Update Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_channel_update else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleThreadCreateButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=3)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_thread_create = not view.state_log_thread_create
+        self.label = "Thread Create Log: ON" if view.state_log_thread_create else "Thread Create Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_thread_create else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleThreadDeleteButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=4)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_thread_delete = not view.state_log_thread_delete
+        self.label = "Thread Delete Log: ON" if view.state_log_thread_delete else "Thread Delete Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_thread_delete else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=view)
+
+
+class _ToggleThreadUpdateButton(discord.ui.Button):
+    def __init__(self, *, label: str, style: discord.ButtonStyle):
+        super().__init__(label=label, style=style, row=4)
+
+    async def callback(self, interaction: discord.Interaction):
+        view: LogsConfigView = self.view  # type: ignore
+        view.state_log_thread_update = not view.state_log_thread_update
+        self.label = "Thread Update Log: ON" if view.state_log_thread_update else "Thread Update Log: OFF"
+        self.style = discord.ButtonStyle.success if view.state_log_thread_update else discord.ButtonStyle.secondary
         await interaction.response.edit_message(view=view)
 
 
@@ -250,6 +376,85 @@ class DeletedMessageLogger(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        # Simple per-guild settings cache: guild_id -> (row_dict, expires_at)
+        self._settings_cache: dict[int, tuple[dict, float]] = {}
+        # Per-guild audit lookup cooldown: guild_id -> last_attempt_timestamp
+        self._audit_last: dict[int, float] = {}
+
+    async def _find_audit_actor(
+        self,
+        guild: discord.Guild,
+        action: discord.AuditLogAction,
+        *,
+        target_id: int | None = None,
+        channel_id: int | None = None,
+        limit: int = 5,
+        seconds: int = 120,
+    ) -> tuple[discord.Member | None, str | None]:
+        """Try to resolve who performed an action and an optional reason from audit logs.
+        Filters to recent entries and optionally matches target_id or channel in extras.
+        Returns (member_or_none, reason_or_none).
+        """
+        try:
+            # Throttle per guild to avoid hammering audit logs
+            import time
+            now_ts = time.monotonic()
+            last = self._audit_last.get(guild.id, 0.0)
+            if (now_ts - last) < 1.5:
+                return (None, None)
+            self._audit_last[guild.id] = now_ts
+            now = discord.utils.utcnow()
+            async for entry in guild.audit_logs(limit=limit, action=action):
+                if entry.created_at and (now - entry.created_at).total_seconds() > seconds:
+                    continue
+                if target_id is not None and getattr(entry.target, "id", None) != target_id:
+                    continue
+                extra = getattr(entry, "extra", None)
+                if channel_id is not None and hasattr(extra, "channel"):
+                    if getattr(extra.channel, "id", None) != channel_id:
+                        continue
+                user = entry.user
+                member = user if isinstance(user, discord.Member) else guild.get_member(getattr(user, "id", 0))
+                reason = entry.reason if isinstance(entry.reason, str) else None
+                return (member, reason)
+        except discord.Forbidden:
+            return (None, None)
+        except Exception:
+            return (None, None)
+        return (None, None)
+
+    async def _get_settings(self, guild_id: int) -> dict | None:
+        """Fetch logging settings for a guild with a short TTL cache."""
+        import time
+        ttl_seconds = 45.0
+        cached = self._settings_cache.get(guild_id)
+        if cached and cached[1] > time.monotonic():
+            return cached[0]
+        pool = getattr(self.bot, "pool", None)
+        if not pool:
+            return None
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_message_delete FROM general_server WHERE guild_id = $1",
+                guild_id,
+            )
+        if row:
+            data = dict(row)
+            self._settings_cache[guild_id] = (data, time.monotonic() + ttl_seconds)
+            return data
+        # Cache miss negative result briefly to avoid hot loops
+        self._settings_cache[guild_id] = ({}, time.monotonic() + 15.0)
+        return None
+
+    async def _safe_send(self, channel: discord.abc.Messageable, *, embed: discord.Embed) -> None:
+        try:
+            await channel.send(embed=embed)
+        except discord.Forbidden:
+            # Missing permissions; ignore to keep bot stable
+            pass
+        except Exception:
+            # Swallow unexpected send errors
+            pass
 
     async def _resolve_deleter(self, message: discord.Message) -> discord.Member | None:
         """Best-effort: find who deleted the message via audit logs.
@@ -325,12 +530,19 @@ class DeletedMessageLogger(commands.Cog):
         log_leave = False
         log_vjoin = False
         log_vleave = False
+        log_bulk = False
+        log_chan_create = False
+        log_chan_delete = False
+        log_chan_update = False
+        log_th_create = False
+        log_th_delete = False
+        log_th_update = False
 
         # Load current settings if available
         if pool:
             async with pool.acquire() as conn:
                 row = await conn.fetchrow(
-                    "SELECT logs_channel_id, log_message_delete, log_nickname_change, log_role_change, log_avatar_change, log_message_edit, log_member_join, log_member_leave, log_voice_join, log_voice_leave FROM general_server WHERE guild_id = $1",
+                    "SELECT logs_channel_id, log_message_delete, log_nickname_change, log_role_change, log_avatar_change, log_message_edit, log_member_join, log_member_leave, log_voice_join, log_voice_leave, log_bulk_delete, log_channel_create, log_channel_delete, log_channel_update, log_thread_create, log_thread_delete, log_thread_update FROM general_server WHERE guild_id = $1",
                     guild.id,
                 )
                 if row:
@@ -344,6 +556,13 @@ class DeletedMessageLogger(commands.Cog):
                     log_leave = row["log_member_leave"]
                     log_vjoin = row["log_voice_join"]
                     log_vleave = row["log_voice_leave"]
+                    log_bulk = row["log_bulk_delete"]
+                    log_chan_create = row["log_channel_create"]
+                    log_chan_delete = row["log_channel_delete"]
+                    log_chan_update = row["log_channel_update"]
+                    log_th_create = row["log_thread_create"]
+                    log_th_delete = row["log_thread_delete"]
+                    log_th_update = row["log_thread_update"]
 
         view = LogsConfigView(
             guild=guild,
@@ -358,6 +577,13 @@ class DeletedMessageLogger(commands.Cog):
             log_member_leave=log_leave,
             log_voice_join=log_vjoin,
             log_voice_leave=log_vleave,
+            log_bulk_delete=log_bulk,
+            log_channel_create=log_chan_create,
+            log_channel_delete=log_chan_delete,
+            log_channel_update=log_chan_update,
+            log_thread_create=log_th_create,
+            log_thread_delete=log_th_delete,
+            log_thread_update=log_th_update,
         )
 
         embed = discord.Embed(title="Logs Configuration", color=BRAND_COLOR)
@@ -375,6 +601,13 @@ class DeletedMessageLogger(commands.Cog):
         embed.add_field(name="Log Leaves", value="Enabled" if log_leave else "Disabled", inline=True)
         embed.add_field(name="Log Voice Joins", value="Enabled" if log_vjoin else "Disabled", inline=True)
         embed.add_field(name="Log Voice Leaves", value="Enabled" if log_vleave else "Disabled", inline=True)
+        embed.add_field(name="Log Bulk Deletes", value="Enabled" if log_bulk else "Disabled", inline=True)
+        embed.add_field(name="Log Channel Create", value="Enabled" if log_chan_create else "Disabled", inline=True)
+        embed.add_field(name="Log Channel Delete", value="Enabled" if log_chan_delete else "Disabled", inline=True)
+        embed.add_field(name="Log Channel Update", value="Enabled" if log_chan_update else "Disabled", inline=True)
+        embed.add_field(name="Log Thread Create", value="Enabled" if log_th_create else "Disabled", inline=True)
+        embed.add_field(name="Log Thread Delete", value="Enabled" if log_th_delete else "Disabled", inline=True)
+        embed.add_field(name="Log Thread Update", value="Enabled" if log_th_update else "Disabled", inline=True)
         embed.set_footer(text=FOOTER_TEXT)
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
 
@@ -383,21 +616,12 @@ class DeletedMessageLogger(commands.Cog):
         # Ignore DMs or system messages
         if message.guild is None or message.author.bot:
             return
-
-        pool = getattr(self.bot, "pool", None)
-        if not pool:
+        # Settings via cache
+        row = await self._get_settings(message.guild.id)
+        if not row or not row.get("log_message_delete"):
             return
 
-        # Fetch settings
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT logs_channel_id, log_message_delete FROM general_server WHERE guild_id = $1",
-                message.guild.id,
-            )
-        if not row or not row["log_message_delete"]:
-            return
-
-        logs_channel_id = row["logs_channel_id"]
+        logs_channel_id = row.get("logs_channel_id")
         if not logs_channel_id:
             return
 
@@ -419,7 +643,8 @@ class DeletedMessageLogger(commands.Cog):
         embed.add_field(name="Message", value=content, inline=False)
         ts = discord.utils.format_dt(message.created_at, style="F") if message.created_at else "Unknown time"
         embed.add_field(name="Time", value=ts, inline=True)
-        embed.add_field(name="Channel", value=message.channel.mention, inline=True)
+        embed.add_field(name="Channel", value=f"{message.channel.mention} (ID: {message.channel.id})", inline=True)
+        embed.add_field(name="Message ID", value=str(message.id), inline=True)
         if message.attachments:
             files_text = "\n".join(a.url for a in message.attachments[:5])
             embed.add_field(name="Attachments", value=files_text, inline=False)
@@ -429,11 +654,7 @@ class DeletedMessageLogger(commands.Cog):
             embed.add_field(name="Deleted By", value=f"{deleter.mention} ({deleter})", inline=False)
         embed.set_footer(text=FOOTER_TEXT)
 
-        try:
-            await channel.send(embed=embed)
-        except Exception:
-            # Swallow send errors silently to avoid cascading failures
-            pass
+        await self._safe_send(channel, embed=embed)
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):
@@ -464,12 +685,330 @@ class DeletedMessageLogger(commands.Cog):
             new = new[:1000] + "…"
         embed.add_field(name="Before", value=old, inline=False)
         embed.add_field(name="After", value=new, inline=False)
-        embed.add_field(name="Channel", value=before.channel.mention, inline=True)
+        embed.add_field(name="Channel", value=f"{before.channel.mention} (ID: {before.channel.id})", inline=True)
         embed.add_field(name="Time", value=discord.utils.format_dt(discord.utils.utcnow(), style="F"), inline=True)
+        embed.add_field(name="Message ID", value=str(before.id), inline=True)
+        try:
+            embed.add_field(name="Jump", value=f"[Go to message]({after.jump_url})", inline=False)
+        except Exception:
+            pass
         embed.add_field(name="Edited By", value=f"{before.author.mention} ({before.author})", inline=False)
         embed.set_footer(text=FOOTER_TEXT)
         try:
             await channel.send(embed=embed)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_raw_bulk_message_delete(self, payload: discord.RawBulkMessageDeleteEvent):
+        guild = self.bot.get_guild(payload.guild_id) if payload.guild_id else None
+        if guild is None:
+            return
+        pool = getattr(self.bot, "pool", None)
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_bulk_delete FROM general_server WHERE guild_id = $1",
+                guild.id,
+            )
+        if not row or not row["logs_channel_id"] or not row["log_bulk_delete"]:
+            return
+        channel = guild.get_channel(row["logs_channel_id"]) or await self.bot.fetch_channel(row["logs_channel_id"])  # type: ignore
+        if channel is None:
+            return
+        # Note: payload.channel_id is the channel messages were deleted from
+        src = guild.get_channel(payload.channel_id)
+        embed = discord.Embed(title="Bulk Messages Deleted", color=BRAND_COLOR)
+        embed.add_field(name="Channel", value=(src.mention if src else f"ID: {payload.channel_id}"), inline=True)
+        embed.add_field(name="Count", value=str(len(payload.message_ids)), inline=True)
+        embed.add_field(name="Time", value=discord.utils.format_dt(discord.utils.utcnow(), style="F"), inline=True)
+        actor, reason = await self._find_audit_actor(guild, discord.AuditLogAction.message_bulk_delete, channel_id=payload.channel_id)
+        if actor is not None:
+            embed.add_field(name="By", value=f"{actor.mention} ({actor})", inline=False)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=FOOTER_TEXT)
+        try:
+            await channel.send(embed=embed)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_guild_channel_create(self, channel: discord.abc.GuildChannel):
+        guild = channel.guild
+        pool = getattr(self.bot, "pool", None)
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_channel_create FROM general_server WHERE guild_id = $1",
+                guild.id,
+            )
+        if not row or not row["logs_channel_id"] or not row["log_channel_create"]:
+            return
+        logs_ch = guild.get_channel(row["logs_channel_id"]) or await self.bot.fetch_channel(row["logs_channel_id"])  # type: ignore
+        if logs_ch is None:
+            return
+        embed = discord.Embed(title="Channel Created", color=BRAND_COLOR)
+        embed.add_field(name="Name", value=f"{getattr(channel, 'mention', '#'+channel.name)}", inline=True)
+        embed.add_field(name="Type", value=channel.type.name if hasattr(channel, 'type') else "Unknown", inline=True)
+        embed.add_field(name="ID", value=str(channel.id), inline=True)
+        try:
+            cat = getattr(channel, "category", None)
+            if cat:
+                embed.add_field(name="Category", value=f"{cat.name} (ID: {cat.id})", inline=True)
+            pos = getattr(channel, "position", None)
+            if isinstance(pos, int):
+                embed.add_field(name="Position", value=str(pos), inline=True)
+        except Exception:
+            pass
+        actor, reason = await self._find_audit_actor(guild, discord.AuditLogAction.channel_create, target_id=channel.id)
+        if actor is not None:
+            embed.add_field(name="By", value=f"{actor.mention} ({actor})", inline=False)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=FOOTER_TEXT)
+        try:
+            await logs_ch.send(embed=embed)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, channel: discord.abc.GuildChannel):
+        guild = channel.guild
+        pool = getattr(self.bot, "pool", None)
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_channel_delete FROM general_server WHERE guild_id = $1",
+                guild.id,
+            )
+        if not row or not row["logs_channel_id"] or not row["log_channel_delete"]:
+            return
+        logs_ch = guild.get_channel(row["logs_channel_id"]) or await self.bot.fetch_channel(row["logs_channel_id"])  # type: ignore
+        if logs_ch is None:
+            return
+        embed = discord.Embed(title="Channel Deleted", color=BRAND_COLOR)
+        try:
+            embed.add_field(name="Name", value=f"#{getattr(channel, 'name', 'unknown')}", inline=True)
+        except Exception:
+            pass
+        embed.add_field(name="ID", value=str(channel.id), inline=True)
+        embed.add_field(name="Type", value=channel.type.name if hasattr(channel, 'type') else "Unknown", inline=True)
+        actor, reason = await self._find_audit_actor(guild, discord.AuditLogAction.channel_delete, target_id=channel.id)
+        if actor is not None:
+            embed.add_field(name="By", value=f"{actor.mention} ({actor})", inline=False)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=FOOTER_TEXT)
+        try:
+            await logs_ch.send(embed=embed)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_guild_channel_update(self, before: discord.abc.GuildChannel, after: discord.abc.GuildChannel):
+        guild = after.guild
+        pool = getattr(self.bot, "pool", None)
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_channel_update FROM general_server WHERE guild_id = $1",
+                guild.id,
+            )
+        if not row or not row["logs_channel_id"] or not row["log_channel_update"]:
+            return
+        logs_ch = guild.get_channel(row["logs_channel_id"]) or await self.bot.fetch_channel(row["logs_channel_id"])  # type: ignore
+        if logs_ch is None:
+            return
+        changes = []
+        try:
+            if getattr(before, 'name', None) != getattr(after, 'name', None):
+                changes.append(f"Name: {getattr(before, 'name', None)} ➜ {getattr(after, 'name', None)}")
+            if getattr(before, 'topic', None) != getattr(after, 'topic', None):
+                changes.append("Topic updated")
+            if getattr(before, 'nsfw', None) != getattr(after, 'nsfw', None):
+                changes.append(f"NSFW: {getattr(before, 'nsfw', None)} ➜ {getattr(after, 'nsfw', None)}")
+            if getattr(before, 'slowmode_delay', None) != getattr(after, 'slowmode_delay', None):
+                changes.append(f"Slowmode: {getattr(before, 'slowmode_delay', None)} ➜ {getattr(after, 'slowmode_delay', None)}")
+            if getattr(before, 'position', None) != getattr(after, 'position', None):
+                changes.append(f"Position: {getattr(before, 'position', None)} ➜ {getattr(after, 'position', None)}")
+        except Exception:
+            pass
+        desc = "\n".join(changes) if changes else "(No diff captured)"
+        embed = discord.Embed(title="Channel Updated", description=desc, color=BRAND_COLOR)
+        embed.add_field(name="Channel", value=f"{getattr(after, 'mention', '#'+after.name)}", inline=False)
+        actor, reason = await self._find_audit_actor(guild, discord.AuditLogAction.channel_update, target_id=after.id)
+        if actor is not None:
+            embed.add_field(name="By", value=f"{actor.mention} ({actor})", inline=False)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=FOOTER_TEXT)
+        try:
+            await logs_ch.send(embed=embed)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_thread_create(self, thread: discord.Thread):
+        guild = thread.guild
+        pool = getattr(self.bot, "pool", None)
+        if not pool or guild is None:
+            return
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_thread_create FROM general_server WHERE guild_id = $1",
+                guild.id,
+            )
+        if not row or not row["logs_channel_id"] or not row["log_thread_create"]:
+            return
+        logs_ch = guild.get_channel(row["logs_channel_id"]) or await self.bot.fetch_channel(row["logs_channel_id"])  # type: ignore
+        if logs_ch is None:
+            return
+        embed = discord.Embed(title="Thread Created", color=BRAND_COLOR)
+        embed.add_field(name="Name", value=thread.mention, inline=True)
+        embed.add_field(name="Parent", value=thread.parent.mention if thread.parent else "None", inline=True)
+        embed.add_field(name="ID", value=str(thread.id), inline=True)
+        try:
+            embed.add_field(name="Auto-Archive", value=f"{thread.auto_archive_duration} min", inline=True)
+            if thread.slowmode_delay:
+                embed.add_field(name="Slowmode", value=f"{thread.slowmode_delay}s", inline=True)
+        except Exception:
+            pass
+        actor, reason = await self._find_audit_actor(guild, discord.AuditLogAction.thread_create, target_id=thread.id)
+        if actor is not None:
+            embed.add_field(name="By", value=f"{actor.mention} ({actor})", inline=False)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=FOOTER_TEXT)
+        try:
+            await logs_ch.send(embed=embed)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_thread_delete(self, thread: discord.Thread):
+        guild = thread.guild
+        pool = getattr(self.bot, "pool", None)
+        if not pool or guild is None:
+            return
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_thread_delete FROM general_server WHERE guild_id = $1",
+                guild.id,
+            )
+        if not row or not row["logs_channel_id"] or not row["log_thread_delete"]:
+            return
+        logs_ch = guild.get_channel(row["logs_channel_id"]) or await self.bot.fetch_channel(row["logs_channel_id"])  # type: ignore
+        if logs_ch is None:
+            return
+        embed = discord.Embed(title="Thread Deleted", color=BRAND_COLOR)
+        try:
+            embed.add_field(name="Name", value=f"{getattr(thread, 'name', 'Unknown')}", inline=True)
+        except Exception:
+            pass
+        embed.add_field(name="ID", value=str(thread.id), inline=True)
+        embed.add_field(name="Parent", value=thread.parent.mention if thread.parent else "None", inline=True)
+        actor, reason = await self._find_audit_actor(guild, discord.AuditLogAction.thread_delete, target_id=thread.id)
+        if actor is not None:
+            embed.add_field(name="By", value=f"{actor.mention} ({actor})", inline=False)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=FOOTER_TEXT)
+        try:
+            await logs_ch.send(embed=embed)
+        except Exception:
+            pass
+
+    @commands.Cog.listener()
+    async def on_thread_update(self, before: discord.Thread, after: discord.Thread):
+        guild = after.guild
+        pool = getattr(self.bot, "pool", None)
+        if not pool or guild is None:
+            return
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_thread_update FROM general_server WHERE guild_id = $1",
+                guild.id,
+            )
+        if not row or not row["logs_channel_id"] or not row["log_thread_update"]:
+            return
+        logs_ch = guild.get_channel(row["logs_channel_id"]) or await self.bot.fetch_channel(row["logs_channel_id"])  # type: ignore
+        if logs_ch is None:
+            return
+        changes = []
+        if before.name != after.name:
+            changes.append(f"Name: {before.name} ➜ {after.name}")
+        if before.archived != after.archived:
+            changes.append(f"Archived: {before.archived} ➜ {after.archived}")
+        if before.locked != after.locked:
+            changes.append(f"Locked: {before.locked} ➜ {after.locked}")
+        if before.auto_archive_duration != after.auto_archive_duration:
+            changes.append(f"Auto-Archive: {before.auto_archive_duration} ➜ {after.auto_archive_duration}")
+        if before.slowmode_delay != after.slowmode_delay:
+            changes.append(f"Slowmode: {before.slowmode_delay}s ➜ {after.slowmode_delay}s")
+        desc = "\n".join(changes) if changes else "(No diff captured)"
+        embed = discord.Embed(title="Thread Updated", description=desc, color=BRAND_COLOR)
+        embed.add_field(name="Thread", value=after.mention, inline=False)
+        actor, reason = await self._find_audit_actor(guild, discord.AuditLogAction.thread_update, target_id=after.id)
+        if actor is not None:
+            embed.add_field(name="By", value=f"{actor.mention} ({actor})", inline=False)
+        if reason:
+            embed.add_field(name="Reason", value=reason, inline=False)
+        embed.set_footer(text=FOOTER_TEXT)
+        try:
+            await logs_ch.send(embed=embed)
+        except Exception:
+            pass
+
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        guild = member.guild
+        pool = getattr(self.bot, "pool", None)
+        if not pool:
+            return
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_voice_join, log_voice_leave FROM general_server WHERE guild_id = $1",
+                guild.id,
+            )
+        if not row or not row["logs_channel_id"]:
+            return
+        logs_channel_id = row["logs_channel_id"]
+        channel = guild.get_channel(logs_channel_id) or await self.bot.fetch_channel(logs_channel_id)  # type: ignore
+        if channel is None:
+            return
+
+        joined = before.channel is None and after.channel is not None
+        left = before.channel is not None and after.channel is None
+        moved = before.channel is not None and after.channel is not None and before.channel.id != after.channel.id
+
+        try:
+            if (joined or moved) and row["log_voice_join"]:
+                dest = after.channel
+                embed = discord.Embed(title="Voice Channel Joined", color=BRAND_COLOR)
+                embed.add_field(name="User", value=f"{member} (ID: {member.id})", inline=False)
+                if moved and before.channel:
+                    embed.add_field(name="From", value=f"{before.channel.mention}", inline=True)
+                embed.add_field(name="To", value=f"{dest.mention if dest else 'Unknown'}", inline=True)
+                embed.add_field(name="Time", value=discord.utils.format_dt(discord.utils.utcnow(), style="F"), inline=False)
+                embed.set_footer(text=FOOTER_TEXT)
+                await channel.send(embed=embed)
+
+            if (left or moved) and row["log_voice_leave"]:
+                src = before.channel
+                embed = discord.Embed(title="Voice Channel Left", color=BRAND_COLOR)
+                embed.add_field(name="User", value=f"{member} (ID: {member.id})", inline=False)
+                embed.add_field(name="From", value=f"{src.mention if src else 'Unknown'}", inline=True)
+                if moved and after.channel:
+                    embed.add_field(name="To", value=f"{after.channel.mention}", inline=True)
+                embed.add_field(name="Time", value=discord.utils.format_dt(discord.utils.utcnow(), style="F"), inline=False)
+                embed.set_footer(text=FOOTER_TEXT)
+                await channel.send(embed=embed)
         except Exception:
             pass
 
@@ -491,7 +1030,17 @@ class DeletedMessageLogger(commands.Cog):
             return
         embed = discord.Embed(title="Member Joined", color=BRAND_COLOR)
         embed.add_field(name="User", value=f"{member.mention} ({member})", inline=False)
+        embed.add_field(name="User ID", value=str(member.id), inline=True)
         embed.add_field(name="Account Created", value=discord.utils.format_dt(member.created_at, style="F"), inline=True)
+        try:
+            age_days = (discord.utils.utcnow() - member.created_at).days
+            embed.add_field(name="Account Age", value=f"{age_days} days", inline=True)
+        except Exception:
+            pass
+        try:
+            embed.add_field(name="Member Count", value=str(member.guild.member_count), inline=True)
+        except Exception:
+            pass
         embed.add_field(name="Time", value=discord.utils.format_dt(discord.utils.utcnow(), style="F"), inline=True)
         embed.set_footer(text=FOOTER_TEXT)
         try:
@@ -523,6 +1072,11 @@ class DeletedMessageLogger(commands.Cog):
             title = "Member Banned"
         embed = discord.Embed(title=title, color=BRAND_COLOR)
         embed.add_field(name="User", value=f"{member} (ID: {member.id})", inline=False)
+        try:
+            if member.joined_at:
+                embed.add_field(name="Joined Server", value=discord.utils.format_dt(member.joined_at, style="F"), inline=True)
+        except Exception:
+            pass
         embed.add_field(name="Time", value=discord.utils.format_dt(discord.utils.utcnow(), style="F"), inline=True)
         if actor is not None:
             embed.add_field(name="By", value=f"{actor.mention} ({actor})", inline=False)

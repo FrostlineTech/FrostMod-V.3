@@ -59,7 +59,9 @@ def main() -> None:
         except Exception as e:
             bot.log.warning(f"Failed to load extension 'purgecog': {e}")
         for ext in ("Welcomecog", "Leavecog", "autorolecog", "help", "Webserver", "rules", "deletedmescog", "usrchangcog", "dbcheckcog", "statuscog", "serverinfocog",
-                    "dadjokecog", "voicejoincog", "voiceleavecog", "Activtycog", "publicinfo", "polls", "utilityimages", "minigames", "memes"):
+                    "dadjokecog", "Activtycog", "publicinfo", "polls", "utilityimages", "minigames", "memes", "catcog", "dogcog",
+                    # New enhancements
+                    "errors", "diagnostics", "setup", "settings", "activity_digest", "moderation", "support"):
             try:
                 await bot.load_extension(ext)
                 bot.log.info(f"[EXT] Loaded extension: {ext}")
@@ -112,7 +114,19 @@ def main() -> None:
             log_member_join BOOLEAN NOT NULL DEFAULT FALSE,
             log_member_leave BOOLEAN NOT NULL DEFAULT FALSE,
             log_voice_join BOOLEAN NOT NULL DEFAULT FALSE,
-            log_voice_leave BOOLEAN NOT NULL DEFAULT FALSE
+            log_voice_leave BOOLEAN NOT NULL DEFAULT FALSE,
+            -- Expanded logging toggles
+            log_bulk_delete BOOLEAN NOT NULL DEFAULT FALSE,
+            log_channel_create BOOLEAN NOT NULL DEFAULT FALSE,
+            log_channel_delete BOOLEAN NOT NULL DEFAULT FALSE,
+            log_channel_update BOOLEAN NOT NULL DEFAULT FALSE,
+            log_thread_create BOOLEAN NOT NULL DEFAULT FALSE,
+            log_thread_delete BOOLEAN NOT NULL DEFAULT FALSE,
+            log_thread_update BOOLEAN NOT NULL DEFAULT FALSE,
+            -- Weekly digest channel
+            digest_channel_id BIGINT,
+            -- Moderation: modlog channel
+            modlog_channel_id BIGINT
         );
 
         CREATE TABLE IF NOT EXISTS user_joins (
@@ -146,6 +160,15 @@ def main() -> None:
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_member_leave BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_voice_join BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_voice_leave BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_bulk_delete BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_channel_create BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_channel_delete BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_channel_update BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_thread_create BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_thread_delete BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_thread_update BOOLEAN NOT NULL DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS digest_channel_id BIGINT;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS modlog_channel_id BIGINT;
 
         -- Activity tracking
         CREATE TABLE IF NOT EXISTS user_activity (
@@ -174,6 +197,44 @@ def main() -> None:
         -- Idempotent migrations to ensure columns exist on older installs
         ALTER TABLE user_activity ADD COLUMN IF NOT EXISTS last_text_channel_id BIGINT;
         ALTER TABLE user_activity ADD COLUMN IF NOT EXISTS last_voice_channel_id BIGINT;
+
+        -- Active polls persistence
+        CREATE TABLE IF NOT EXISTS polls_active (
+            message_id BIGINT PRIMARY KEY,
+            channel_id BIGINT NOT NULL,
+            guild_id BIGINT NOT NULL,
+            question TEXT NOT NULL,
+            options JSONB NOT NULL,
+            closed BOOLEAN NOT NULL DEFAULT FALSE
+        );
+        CREATE TABLE IF NOT EXISTS polls_votes (
+            message_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            option_idx INT NOT NULL,
+            PRIMARY KEY (message_id, user_id)
+        );
+
+        -- Moderation: cases and timed roles
+        CREATE TABLE IF NOT EXISTS mod_cases (
+            case_id BIGSERIAL PRIMARY KEY,
+            guild_id BIGINT NOT NULL,
+            target_id BIGINT NOT NULL,
+            target_tag TEXT,
+            moderator_id BIGINT NOT NULL,
+            action TEXT NOT NULL, -- warn/mute/ban/unban/etc
+            reason TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_mod_cases_guild_target ON mod_cases (guild_id, target_id, case_id DESC);
+
+        CREATE TABLE IF NOT EXISTS timed_roles (
+            guild_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            role_id BIGINT NOT NULL,
+            remove_at TIMESTAMPTZ NOT NULL,
+            PRIMARY KEY (guild_id, user_id, role_id)
+        );
         COMMIT;
         """
         async with bot.pool.acquire() as conn:

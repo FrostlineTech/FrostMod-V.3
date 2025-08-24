@@ -1,6 +1,6 @@
-#leave cog ensure this cog is registered in the molls.py file
-#ensure all embeds say powered by FSLLC / FrostlineSolutions.com at the bottom of the embed in the footer
-#ensure all embeds are color purple (0x8e00ff)
+# Leave cog — ensure this cog is registered in the main bot loader
+# Ensure all embeds say "Powered by Frostline Solutions LLC / frostlinesolutions.com" in the footer
+# Ensure all embeds use cobalt blue BRAND_COLOR (0x0047AB)
 
 from __future__ import annotations
 

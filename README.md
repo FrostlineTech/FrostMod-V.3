@@ -10,6 +10,7 @@ A Python Discord bot built with discord.py that provides moderation utilities, w
 - Purge command for bulk message deletion
 - PostgreSQL-backed configuration and audit logs (joins/leaves)
 - Structured logging and developer-guild fast command sync
+- Centralized, toggleable logging UI for many events (see Logging)
 
 ## Requirements
 
@@ -74,13 +75,24 @@ python -u frostmodv3.py
 - `/help` — Admin help with setup guide and troubleshooting (ephemeral)
 - `/serverinfo` — Show server details (name, ID, owner, members, boosts, channels, roles, emojis, created)
 
+- `/logs` — Configure logs channel and toggle log types with an interactive UI (admin)
+- `/webstatus` — Check website heartbeat/latency (outbound-only; no hosting)
+
 All commands are guild-only and require appropriate permissions (e.g., Manage Guild, Manage Messages).
 
 ## Database Schema
 
 Tables:
 
-- `general_server(guild_id, guild_name, join_role_id, welcome_channel_id, leave_channel_id, welcome_message, leave_message)`
+- `general_server(guild_id, guild_name, join_role_id, welcome_channel_id, leave_channel_id, welcome_message, leave_message,
+  logs_channel_id,
+  log_message_delete, log_message_edit,
+  log_nickname_change, log_role_change, log_avatar_change,
+  log_member_join, log_member_leave,
+  log_voice_join, log_voice_leave,
+  log_bulk_delete,
+  log_channel_create, log_channel_delete, log_channel_update,
+  log_thread_create, log_thread_delete, log_thread_update)`
 - `user_joins(user_id, user_name, guild_id, guild_name, joined_at)`
 - `user_leaves(user_id, user_name, guild_id, guild_name, left_at)`
 
@@ -89,7 +101,33 @@ Indexes:
 - `idx_user_joins_guild_time(guild_id, joined_at DESC)`
 - `idx_user_leaves_guild_time(guild_id, left_at DESC)`
 
-See `Schema.sql` for a full drop-and-recreate script suitable for pgAdmin.
+The bot performs idempotent schema ensures at startup. Optionally, you can maintain SQL scripts for manual setup.
+
+## Project Constraints
+
+- No web backend: all configuration is done in Discord via slash commands and UI components; infrastructure is limited to the bot process and PostgreSQL.
+- No paywalls/premium tiers: all features are available without payment gates. Keep the project fully functional with open configuration.
+
+Note: The `Webserver` cog is a simple outbound heartbeat checker for your website (no web server hosted by the bot).
+
+## Logging
+
+Use `/logs` to select the logs channel and toggle specific events. The bot posts branded embeds with useful context (IDs, timestamps, links, actor when resolvable via audit logs).
+
+__Supported toggles:__
+
+- Message delete, message edit
+- Nickname change, role change, avatar change
+- Member join, member leave (with kick/ban detection when possible)
+- Voice join, voice leave/move
+- Bulk message delete
+- Channel create/delete/update
+- Thread create/delete/update
+
+Notes:
+
+- Some actor fields require “View Audit Log” permission.
+- Embeds include compact diffs for updates (e.g., channel/thread changes) and jump links where applicable.
 
 ## Configuration & Logging
 
@@ -102,6 +140,7 @@ See `Schema.sql` for a full drop-and-recreate script suitable for pgAdmin.
 - Slash commands not visible: ensure the bot has application.commands, you’re in a guild, and wait for global propagation; dev guild should be instant.
 - Autorole didn’t apply: ensure the bot’s highest role is ABOVE the target role and it has “Manage Roles”. Check logs for detailed role assignment diagnostics.
 - Welcome/leave embed missing: verify configured channels and bot permissions to send messages and embeds in those channels.
+- No logs appearing: set a logs channel with `/logs` and ensure relevant toggles are enabled. For actor fields, grant the bot “View Audit Log”.
 - Check connectivity quickly with admin-only diagnostics:
 
   - Run `/health` to see websocket latency and interaction RTT.

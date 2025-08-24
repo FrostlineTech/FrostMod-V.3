@@ -5,6 +5,7 @@ from discord import app_commands
 from discord.ext import commands
 
 from branding import BRAND_COLOR, FOOTER_TEXT
+from ui import make_embed
 
 
 ABOUT_TEXT = (
@@ -38,18 +39,14 @@ class PublicInfo(commands.Cog):
 
     @app_commands.command(name="about", description="About FrostMod: features, privacy, and support info")
     async def about(self, interaction: discord.Interaction):
-        embed = discord.Embed(title="About FrostMod", description=ABOUT_TEXT, color=BRAND_COLOR)
-        if interaction.guild and interaction.guild.icon:
-            embed.set_thumbnail(url=interaction.guild.icon.url)
-        embed.set_footer(text=FOOTER_TEXT)
+        embed = make_embed(title="About FrostMod", description=ABOUT_TEXT, color=BRAND_COLOR, interaction=interaction)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @app_commands.command(name="commands", description="List common member commands with tips")
     async def commands_list(self, interaction: discord.Interaction):
-        embed = discord.Embed(title="Member Commands", color=BRAND_COLOR)
+        embed = make_embed(title="Member Commands", color=BRAND_COLOR, interaction=interaction)
         for name, desc in MEMBER_COMMANDS:
             embed.add_field(name=name, value=desc, inline=False)
-        embed.set_footer(text=FOOTER_TEXT)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
