@@ -7,16 +7,16 @@ A focused plan for upcoming improvements to FrostMod. Timelines are indicative a
 - No web backend or external dashboard. All configuration happens in Discord via slash commands and UI components.
 - No paywalls/premium tiers. All features remain free and accessible.
 
-## 1) Logging Enhancements
+## 1) Logging & Moderation enhancements
 
 - [x] Centralized `/logs` UI (channel picker + per-toggle settings)
 - [x] Bulk delete, channel/thread create/delete/update listeners
 - [x] Verbose embeds with IDs, diffs, jump links, and actor attribution via audit logs
-- [ ] Emoji & sticker events (create/delete/update) with toggles
-- [ ] Webhook events (create/update/delete) with toggles
-- [ ] Server boosts and tier changes
-- [ ] Message pin/unpin and reaction add/remove (rate-limit aware)
-- [ ] Optional verbosity levels (Compact vs Detailed) toggle in `/logs`
+- [x] Connect Local Deepseek model for AI moderation (warn and delete inappropriate messages)
+- [x] Implemented `/testmod` command to test AI moderation
+- [x] Implemented `/disabletheta` to enable/disable AI moderation per server
+- [x] Added `/modstats` to view AI moderation performance metrics
+- [ ] Implement `/modlog` command to view moderation logs
 
 ## 2) UX & Configuration
 
@@ -56,7 +56,18 @@ A focused plan for upcoming improvements to FrostMod. Timelines are indicative a
 - [ ] Add screenshots/gifs of the `/logs` UI in README
 - [ ] Changelog for each release with migration notes
 
-## 8) Nice-to-haves
+## 8) AI & User Profiling
+
+- [x] Implement `/aiexplain` command to explain AI moderation decisions
+- [x] Implement `/risklevel` command to view user risk levels
+- [x] Create user profiling system that tracks message patterns and guild activity
+- [x] Develop AI-based risk assessment with multiple risk factors
+- [x] Ensure timezone-aware datetime handling for all user analytics
+- [ ] Add moderation actions triggered by high risk levels
+- [ ] Implement customizable risk thresholds per server
+- [X] implement `/aimodstats` command to view AI moderation statistics
+
+## 9) Nice-to-haves
 
 - [ ] Export/import guild config (JSON) for migrations between servers
 - [ ] Advanced filters (ignore channels/roles/users for specific log types)

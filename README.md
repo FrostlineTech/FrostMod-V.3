@@ -11,12 +11,17 @@ A Python Discord bot built with discord.py that provides moderation utilities, w
 - PostgreSQL-backed configuration and audit logs (joins/leaves)
 - Structured logging and developer-guild fast command sync
 - Centralized, toggleable logging UI for many events (see Logging)
+- AI moderation using local DeepSeek model to detect and remove inappropriate messages
+- User profiling system that tracks message patterns and guild activity
+- Risk assessment using AI to identify potentially problematic users
 
 ## Requirements
 
 - Python 3.11+ (tested with 3.13)
 - PostgreSQL 12+
 - A Discord bot token
+- DeepSeek model running locally via text-generation-webui (for AI moderation)
+- NVIDIA GPU recommended (optimized for RTX 3060)
 
 ## Setup
 
@@ -36,6 +41,11 @@ DB_USER=postgres
 DB_PASSWORD=your_password
 DB_HOST=localhost
 DB_PORT=5432
+
+# AI Moderation settings
+Local_model=your_deepseek_model_name
+AI_API_URL=http://127.0.0.1:5000
+ai_api_path=/v1/chat/completions
 ```
 
 1. Initialize the database (choose one):
@@ -77,6 +87,10 @@ python -u frostmodv3.py
 
 - `/logs` — Configure logs channel and toggle log types with an interactive UI (admin)
 - `/webstatus` — Check website heartbeat/latency (outbound-only; no hosting)
+- `/disabletheta` — Enable/disable AI moderation for the server (admin)
+- `/testmod` — Test the AI moderation on a provided message (admin)
+- `/modstats` — View AI moderation statistics and performance metrics (admin)
+- `/risklevel <@user>` — Get an AI-based risk assessment for a user (admin only)
 
 All commands are guild-only and require appropriate permissions (e.g., Manage Guild, Manage Messages).
 
@@ -95,6 +109,7 @@ Tables:
   log_thread_create, log_thread_delete, log_thread_update)`
 - `user_joins(user_id, user_name, guild_id, guild_name, joined_at)`
 - `user_leaves(user_id, user_name, guild_id, guild_name, left_at)`
+- `user_profiles(user_id, username, guilds, last_message_content, last_message_guild_id, last_message_guild_name, last_message_at, message_history, message_count, activity_pattern, risk_assessment, risk_score, risk_factors, profile_updated_at, created_at)`
 
 Indexes:
 

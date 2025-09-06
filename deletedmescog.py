@@ -376,10 +376,6 @@ class DeletedMessageLogger(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        # Simple per-guild settings cache: guild_id -> (row_dict, expires_at)
-        self._settings_cache: dict[int, tuple[dict, float]] = {}
-        # Per-guild audit lookup cooldown: guild_id -> last_attempt_timestamp
-        self._audit_last: dict[int, float] = {}
 
     async def _find_audit_actor(
         self,
@@ -396,13 +392,6 @@ class DeletedMessageLogger(commands.Cog):
         Returns (member_or_none, reason_or_none).
         """
         try:
-            # Throttle per guild to avoid hammering audit logs
-            import time
-            now_ts = time.monotonic()
-            last = self._audit_last.get(guild.id, 0.0)
-            if (now_ts - last) < 1.5:
-                return (None, None)
-            self._audit_last[guild.id] = now_ts
             now = discord.utils.utcnow()
             async for entry in guild.audit_logs(limit=limit, action=action):
                 if entry.created_at and (now - entry.created_at).total_seconds() > seconds:
@@ -422,39 +411,6 @@ class DeletedMessageLogger(commands.Cog):
         except Exception:
             return (None, None)
         return (None, None)
-
-    async def _get_settings(self, guild_id: int) -> dict | None:
-        """Fetch logging settings for a guild with a short TTL cache."""
-        import time
-        ttl_seconds = 45.0
-        cached = self._settings_cache.get(guild_id)
-        if cached and cached[1] > time.monotonic():
-            return cached[0]
-        pool = getattr(self.bot, "pool", None)
-        if not pool:
-            return None
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                "SELECT logs_channel_id, log_message_delete FROM general_server WHERE guild_id = $1",
-                guild_id,
-            )
-        if row:
-            data = dict(row)
-            self._settings_cache[guild_id] = (data, time.monotonic() + ttl_seconds)
-            return data
-        # Cache miss negative result briefly to avoid hot loops
-        self._settings_cache[guild_id] = ({}, time.monotonic() + 15.0)
-        return None
-
-    async def _safe_send(self, channel: discord.abc.Messageable, *, embed: discord.Embed) -> None:
-        try:
-            await channel.send(embed=embed)
-        except discord.Forbidden:
-            # Missing permissions; ignore to keep bot stable
-            pass
-        except Exception:
-            # Swallow unexpected send errors
-            pass
 
     async def _resolve_deleter(self, message: discord.Message) -> discord.Member | None:
         """Best-effort: find who deleted the message via audit logs.
@@ -616,12 +572,21 @@ class DeletedMessageLogger(commands.Cog):
         # Ignore DMs or system messages
         if message.guild is None or message.author.bot:
             return
-        # Settings via cache
-        row = await self._get_settings(message.guild.id)
-        if not row or not row.get("log_message_delete"):
+
+        pool = getattr(self.bot, "pool", None)
+        if not pool:
             return
 
-        logs_channel_id = row.get("logs_channel_id")
+        # Fetch settings
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT logs_channel_id, log_message_delete FROM general_server WHERE guild_id = $1",
+                message.guild.id,
+            )
+        if not row or not row["log_message_delete"]:
+            return
+
+        logs_channel_id = row["logs_channel_id"]
         if not logs_channel_id:
             return
 
@@ -654,7 +619,11 @@ class DeletedMessageLogger(commands.Cog):
             embed.add_field(name="Deleted By", value=f"{deleter.mention} ({deleter})", inline=False)
         embed.set_footer(text=FOOTER_TEXT)
 
-        await self._safe_send(channel, embed=embed)
+        try:
+            await channel.send(embed=embed)
+        except Exception:
+            # Swallow send errors silently to avoid cascading failures
+            pass
 
     @commands.Cog.listener()
     async def on_message_edit(self, before: discord.Message, after: discord.Message):

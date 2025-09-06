@@ -33,6 +33,8 @@ class HelpSelect(discord.ui.Select):
         options = [
             discord.SelectOption(label="Setup", value="setup", description="Quick start to configure core features"),
             discord.SelectOption(label="Logging", value="logging", description="Configure logs channel and toggles"),
+            discord.SelectOption(label="AI Moderation", value="aimod", description="AI features and moderation tools"),
+            discord.SelectOption(label="User Profiling", value="profile", description="User risk assessment and profiling"),
             discord.SelectOption(label="Public Info", value="public", description="/about and /commands"),
             discord.SelectOption(label="Utilities", value="utilities", description="Avatars, banners, userinfo"),
             discord.SelectOption(label="Games", value="games", description="RPS, TicTacToe, Connect4"),
@@ -56,7 +58,8 @@ def help_category_embed(category: str, interaction: discord.Interaction) -> disc
             "3) `/logs` — pick logs channel, toggle deletes/edits/joins\n"
             "4) `/jrole <@role>` — set autorole (ensure bot role is higher)\n"
             "5) `/poll` — create a poll (admin only)\n"
-            "6) `/status`, `/db` — diagnostics"
+            "6) `/status`, `/db` — diagnostics\n"
+            "7) `/disabletheta` — configure AI moderation settings"
         )
         return make_embed(title="Admin Help — Setup", description=desc, interaction=interaction)
     if category == "logging":
@@ -81,6 +84,27 @@ def help_category_embed(category: str, interaction: discord.Interaction) -> disc
             "Example: `Welcome {user} to {guild}! We now have {membercount} members.`"
         )
         return make_embed(title="Admin Help — Templates", description=desc, interaction=interaction)
+        
+    if category == "aimod":
+        desc = (
+            "AI moderation features using local DeepSeek model:\n\n"
+            "`/disabletheta` — Enable/disable AI moderation for the server\n"
+            "`/testmod <message>` — Test AI moderation on a sample message\n"
+            "`/modstats` — View AI moderation statistics and performance metrics\n"
+            "`/aiexplain` — Learn how AI moderation works in detail\n\n"
+            "The AI model analyzes messages for inappropriate content and can warn or delete based on confidence levels."
+        )
+        return make_embed(title="Admin Help — AI Moderation", description=desc, interaction=interaction)
+        
+    if category == "profile":
+        desc = (
+            "User profiling and risk assessment features:\n\n"
+            "`/risklevel <@user>` — Get an AI-based risk assessment for a user\n\n"
+            "The system automatically builds user profiles based on message patterns, guild membership, and activity. "
+            "Administrators can use the risk assessment to identify potentially problematic users. "
+            "All assessments include risk factors, confidence scores, and account metadata."
+        )
+        return make_embed(title="Admin Help — User Profiling", description=desc, interaction=interaction)
     if category == "perms":
         desc = (
             "• Manage Guild required for admin commands.\n"

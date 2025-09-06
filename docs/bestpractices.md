@@ -8,6 +8,8 @@ This project follows a set of practices that make your bot reliable, maintainabl
 - **Single entrypoint (`frostmodv3.py`)**: Centralizes startup concerns: environment loading, logging config, DB initialization, extension loading, and application command syncing.
 - **Centralized logging UI (`deletedmescog.py`)**: A single `/logs` command hosts a configuration view (`LogsConfigView`) for channel selection and per-toggle log settings that persist to PostgreSQL.
 - **Configuration via `.env`**: Secrets (token, DB creds) are not hardcoded. They’re loaded securely with `python-dotenv`.
+- **AI moderation (`aimodcog.py`)**: Uses local DeepSeek model to detect and remove inappropriate messages with toggles per server.
+- **User profiling (`userprofilecog.py`)**: Tracks user behavior patterns and message history to build comprehensive profiles with AI risk assessment.
 
 ## Slash Commands & Syncing
 
@@ -61,6 +63,30 @@ This project follows a set of practices that make your bot reliable, maintainabl
 
 - **Start script (`Start_frostmod.bat`)**: Colored console, UTF-8, and unbuffered output for real-time logs.
 - **Schema.sql**: Full drop-and-recreate script for easy DB resets during testing.
+
+## AI Moderation Best Practices
+
+- **Local model usage**: Connect to a locally hosted LLM via API rather than sending content to external services for privacy and control.
+- **Confidence thresholds**: Only take moderation actions when confidence exceeds a reasonable threshold (e.g., 0.75).
+- **Per-server toggles**: Allow administrators to enable/disable AI moderation per server with `/disabletheta` command.
+- **Transparent logging**: All moderation actions are logged to the configured logs channel with detailed reason and confidence score.
+- **Polite warnings**: When removing content, provide brief respectful reminders rather than harsh warnings.
+- **Diagnostic tools**: Provide `/testmod` for testing moderation on sample messages and `/modstats` for system performance.
+- **Hardware optimization**: Detect and optimize for available hardware (GPU/CPU) at startup.
+- **Error resilience**: Robust error handling for API connectivity issues and malformed responses.
+
+## User Profiling & Risk Assessment Best Practices
+
+- **Privacy-first design**: Store only necessary data for analysis; limit message history size and sensitive content.
+- **Secure storage**: Use JSONB for structured data with proper indexing for efficient retrieval.
+- **Timezone awareness**: Always use timezone-aware datetime objects to prevent comparison errors.
+- **Admin-only access**: Restrict `/risklevel` command to administrators with appropriate permissions.
+- **Multi-factor analysis**: Base risk assessments on multiple factors, not just single messages or incidents.
+- **Transparent reports**: Provide detailed explanations of risk factors and confidence levels in assessment results.
+- **Ethical usage**: Use risk assessment as a tool for awareness, not automatic punishment or discrimination.
+- **Regular updates**: Periodically refresh risk assessments as user behavior patterns evolve.
+- **Graceful degradation**: Handle AI service outages without compromising core functionality.
+- **Fact-based reports**: Focus on objective patterns rather than subjective judgments in risk assessments.
 
 ## Future Enhancements
 

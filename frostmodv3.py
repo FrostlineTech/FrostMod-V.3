@@ -61,7 +61,9 @@ def main() -> None:
         for ext in ("Welcomecog", "Leavecog", "autorolecog", "help", "Webserver", "rules", "deletedmescog", "usrchangcog", "dbcheckcog", "statuscog", "serverinfocog",
                     "dadjokecog", "Activtycog", "publicinfo", "polls", "utilityimages", "minigames", "memes", "catcog", "dogcog",
                     # New enhancements
-                    "errors", "diagnostics", "setup", "settings", "activity_digest", "moderation", "support"):
+                    "errors", "diagnostics", "setup", "settings", "activity_digest", "moderation", "support", "aimodcog", "aihelpcog", "userprofilecog",
+                    # New fun cogs
+                    "trivia", "hangman", "scramble", "wyr"):
             try:
                 await bot.load_extension(ext)
                 bot.log.info(f"[EXT] Loaded extension: {ext}")
@@ -126,7 +128,19 @@ def main() -> None:
             -- Weekly digest channel
             digest_channel_id BIGINT,
             -- Moderation: modlog channel
-            modlog_channel_id BIGINT
+            modlog_channel_id BIGINT,
+            -- AI Moderation settings
+            ai_moderation_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            ai_temperature_threshold FLOAT NOT NULL DEFAULT 0.3,
+            ai_warning_template TEXT,
+            ai_low_severity_action TEXT DEFAULT 'warn', -- warn, delete, none
+            ai_med_severity_action TEXT DEFAULT 'delete', -- warn, delete, none
+            ai_high_severity_action TEXT DEFAULT 'delete', -- warn, delete, none
+            ai_low_severity_threshold FLOAT DEFAULT 0.65,
+            ai_med_severity_threshold FLOAT DEFAULT 0.75,
+            ai_high_severity_threshold FLOAT DEFAULT 0.85,
+            ai_include_message_context BOOLEAN DEFAULT FALSE,
+            ai_context_message_count SMALLINT DEFAULT 3
         );
 
         CREATE TABLE IF NOT EXISTS user_joins (
@@ -169,6 +183,73 @@ def main() -> None:
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS log_thread_update BOOLEAN NOT NULL DEFAULT FALSE;
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS digest_channel_id BIGINT;
         ALTER TABLE general_server ADD COLUMN IF NOT EXISTS modlog_channel_id BIGINT;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_moderation_enabled BOOLEAN NOT NULL DEFAULT TRUE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_temperature_threshold FLOAT NOT NULL DEFAULT 0.3;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_warning_template TEXT;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_low_severity_action TEXT DEFAULT 'warn';
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_med_severity_action TEXT DEFAULT 'delete';
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_high_severity_action TEXT DEFAULT 'delete';
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_low_severity_threshold FLOAT DEFAULT 0.65;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_med_severity_threshold FLOAT DEFAULT 0.75;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_high_severity_threshold FLOAT DEFAULT 0.85;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_include_message_context BOOLEAN DEFAULT FALSE;
+        ALTER TABLE general_server ADD COLUMN IF NOT EXISTS ai_context_message_count SMALLINT DEFAULT 3;
+        
+        -- User Profiles migration: ensure all columns exist
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.tables 
+                WHERE table_schema = 'public' AND table_name = 'user_profiles'
+            ) THEN
+                CREATE TABLE user_profiles (
+                    user_id BIGINT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    guilds JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    last_message_content TEXT,
+                    last_message_guild_id BIGINT,
+                    last_message_guild_name TEXT,
+                    last_message_at TIMESTAMPTZ,
+                    message_history JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    message_count INT NOT NULL DEFAULT 0,
+                    activity_pattern JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    risk_assessment TEXT DEFAULT 'UNKNOWN',
+                    risk_score FLOAT DEFAULT 0.0,
+                    risk_factors JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    profile_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+            ELSE
+                -- Add any missing columns
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'user_profiles' AND column_name = 'risk_assessment'
+                ) THEN
+                    ALTER TABLE user_profiles ADD COLUMN risk_assessment TEXT DEFAULT 'UNKNOWN';
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'user_profiles' AND column_name = 'risk_score'
+                ) THEN
+                    ALTER TABLE user_profiles ADD COLUMN risk_score FLOAT DEFAULT 0.0;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'user_profiles' AND column_name = 'risk_factors'
+                ) THEN
+                    ALTER TABLE user_profiles ADD COLUMN risk_factors JSONB NOT NULL DEFAULT '[]'::jsonb;
+                END IF;
+                
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'user_profiles' AND column_name = 'profile_updated_at'
+                ) THEN
+                    ALTER TABLE user_profiles ADD COLUMN profile_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+                END IF;
+            END IF;
+        END $$;
 
         -- Activity tracking
         CREATE TABLE IF NOT EXISTS user_activity (
@@ -214,6 +295,163 @@ def main() -> None:
             PRIMARY KEY (message_id, user_id)
         );
 
+        -- MiniGames: persistent Connect 4 games
+        CREATE TABLE IF NOT EXISTS games_connect4 (
+            game_id BIGSERIAL PRIMARY KEY,
+            guild_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL,
+            message_id BIGINT NOT NULL,
+            p1 BIGINT NOT NULL,
+            p2 BIGINT NOT NULL,
+            turn BIGINT NOT NULL,
+            winner BIGINT,
+            grid JSONB NOT NULL,
+            finished BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        -- Trivia: questions and scores
+        CREATE TABLE IF NOT EXISTS trivia_questions (
+            id BIGSERIAL PRIMARY KEY,
+            guild_id BIGINT, -- null = global question
+            question TEXT NOT NULL,
+            options JSONB NOT NULL, -- array of strings
+            correct_idx INT NOT NULL,
+            author_id BIGINT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE TABLE IF NOT EXISTS trivia_scores (
+            guild_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            score INT NOT NULL DEFAULT 0,
+            PRIMARY KEY (guild_id, user_id)
+        );
+
+        -- Hangman: persistent games
+        CREATE TABLE IF NOT EXISTS games_hangman (
+            game_id BIGSERIAL PRIMARY KEY,
+            guild_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL,
+            message_id BIGINT NOT NULL,
+            starter_id BIGINT NOT NULL,
+            word TEXT NOT NULL,
+            guessed JSONB NOT NULL, -- array of single-letter strings
+            attempts_left INT NOT NULL,
+            finished BOOLEAN NOT NULL DEFAULT FALSE,
+            winner_id BIGINT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        -- Scramble: persistent per-channel puzzle
+        CREATE TABLE IF NOT EXISTS games_scramble (
+            game_id BIGSERIAL PRIMARY KEY,
+            guild_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL,
+            message_id BIGINT NOT NULL,
+            word TEXT NOT NULL,
+            scrambled TEXT NOT NULL,
+            finished BOOLEAN NOT NULL DEFAULT FALSE,
+            winner_id BIGINT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        -- Would You Rather: persistent vote counters
+        CREATE TABLE IF NOT EXISTS games_wyr (
+            game_id BIGSERIAL PRIMARY KEY,
+            guild_id BIGINT NOT NULL,
+            channel_id BIGINT NOT NULL,
+            message_id BIGINT NOT NULL,
+            prompt_a TEXT NOT NULL,
+            prompt_b TEXT NOT NULL,
+            count_a INT NOT NULL DEFAULT 0,
+            count_b INT NOT NULL DEFAULT 0,
+            finished BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        
+        -- AI Moderation: user violation tracking
+        CREATE TABLE IF NOT EXISTS ai_mod_violations (
+            violation_id BIGSERIAL PRIMARY KEY,
+            guild_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            channel_id BIGINT,
+            violation_type TEXT NOT NULL, -- 'low', 'med', 'high'
+            confidence FLOAT NOT NULL,
+            message_content TEXT,
+            reason TEXT,
+            action_taken TEXT NOT NULL, -- 'warn', 'delete', 'none'
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        
+        -- AI Moderation: rate limiting tracking
+        CREATE TABLE IF NOT EXISTS ai_mod_rate_limits (
+            guild_id BIGINT NOT NULL,
+            user_id BIGINT NOT NULL,
+            violation_count INT NOT NULL DEFAULT 1,
+            last_violation_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            current_limit_duration INT NOT NULL DEFAULT 5, -- seconds
+            expires_at TIMESTAMPTZ,
+            PRIMARY KEY (guild_id, user_id)
+        );
+
+        -- WYR per-user votes to prevent multiple votes
+        CREATE TABLE IF NOT EXISTS games_wyr_votes (
+            game_id BIGINT NOT NULL REFERENCES games_wyr(game_id) ON DELETE CASCADE,
+            user_id BIGINT NOT NULL,
+            choice CHAR(1) NOT NULL CHECK (choice IN ('A','B')),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            PRIMARY KEY (game_id, user_id)
+        );
+
+        -- Ensure JSONB types on existing installs (in case older schemas used TEXT)
+        DO $$
+        BEGIN
+            -- Add created_at to games_wyr_votes if missing
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'games_wyr_votes' AND column_name = 'created_at'
+            ) THEN
+                EXECUTE 'ALTER TABLE games_wyr_votes ADD COLUMN created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'games_hangman' AND column_name = 'guessed' AND data_type <> 'jsonb'
+            ) THEN
+                EXECUTE 'ALTER TABLE games_hangman ALTER COLUMN guessed TYPE JSONB USING guessed::jsonb';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'games_connect4' AND column_name = 'grid' AND data_type <> 'jsonb'
+            ) THEN
+                EXECUTE 'ALTER TABLE games_connect4 ALTER COLUMN grid TYPE JSONB USING grid::jsonb';
+            END IF;
+            IF EXISTS (
+                SELECT 1 FROM information_schema.columns
+                WHERE table_name = 'trivia_questions' AND column_name = 'options' AND data_type <> 'jsonb'
+            ) THEN
+                EXECUTE 'ALTER TABLE trivia_questions ALTER COLUMN options TYPE JSONB USING options::jsonb';
+            END IF;
+        END $$;
+
+        -- User Profiles: AI-based user profiling and risk assessment
+        CREATE TABLE IF NOT EXISTS user_profiles (
+            user_id BIGINT PRIMARY KEY,
+            username TEXT NOT NULL,
+            guilds JSONB NOT NULL DEFAULT '[]'::jsonb, -- Array of {guild_id, guild_name}
+            last_message_content TEXT,
+            last_message_guild_id BIGINT,
+            last_message_guild_name TEXT,
+            last_message_at TIMESTAMPTZ,
+            message_history JSONB NOT NULL DEFAULT '[]'::jsonb, -- Array of recent messages for analysis
+            message_count INT NOT NULL DEFAULT 0,
+            activity_pattern JSONB NOT NULL DEFAULT '{}'::jsonb, -- Activity patterns by hour/day
+            risk_assessment TEXT DEFAULT 'UNKNOWN', -- LOW, MEDIUM, HIGH, VERY HIGH, UNKNOWN
+            risk_score FLOAT DEFAULT 0.0, -- 0-100 scale
+            risk_factors JSONB NOT NULL DEFAULT '[]'::jsonb, -- Array of risk factors
+            profile_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        
         -- Moderation: cases and timed roles
         CREATE TABLE IF NOT EXISTS mod_cases (
             case_id BIGSERIAL PRIMARY KEY,
