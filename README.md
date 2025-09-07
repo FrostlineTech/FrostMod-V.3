@@ -12,8 +12,13 @@ A Python Discord bot built with discord.py that provides moderation utilities, w
 - Structured logging and developer-guild fast command sync
 - Centralized, toggleable logging UI for many events (see Logging)
 - AI moderation using local DeepSeek model to detect and remove inappropriate messages
+- Advanced pattern recognition to detect content split across multiple messages
+- Channel-specific moderation settings with customizable strictness levels
 - User profiling system that tracks message patterns and guild activity
 - Risk assessment using AI to identify potentially problematic users
+- Activity pattern analysis for anomaly detection
+- Social connection analysis to detect networks of high-risk users
+- AI-powered help system for answering server-specific questions
 
 ## Requirements
 
@@ -90,7 +95,11 @@ python -u frostmodv3.py
 - `/disabletheta` — Enable/disable AI moderation for the server (admin)
 - `/testmod` — Test the AI moderation on a provided message (admin)
 - `/modstats` — View AI moderation statistics and performance metrics (admin)
+- `/channelmod [#channel]` — Configure channel-specific moderation settings (admin)
 - `/risklevel <@user>` — Get an AI-based risk assessment for a user (admin only)
+- `/ask` — Ask the AI assistant a question about the server
+- `/askabout <topic>` — Ask about a specific topic with context-aware responses
+- `/aiexplain` — Learn how AI moderation works in detail
 
 All commands are guild-only and require appropriate permissions (e.g., Manage Guild, Manage Messages).
 

@@ -54,3 +54,9 @@ node_modules/
 # Database dumps/backups
 *.dump
 *.sql
+
+# Propietary data
+user_data/ 
+logs/
+*.json
+*.csv

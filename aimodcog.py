@@ -12,7 +12,9 @@ import time
 import platform
 import re
 import random
-from datetime import datetime, timedelta
+import csv
+import os.path
+from datetime import datetime, timedelta, timezone
 import psutil
 
 import discord
@@ -46,94 +48,404 @@ class AIModSettingsView(discord.ui.View):
         """Disable all components when the view times out."""
         for item in self.children:
             item.disabled = True
-            
-    @discord.ui.button(label="Enable", style=discord.ButtonStyle.success, row=0, disabled=False)
-    async def enable_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Enable AI moderation."""
-        # Update settings
-        self.settings["enabled"] = True
-        self.guild_name = interaction.guild.name if interaction.guild else ""
-        
-        # Update database
-        success = await self.cog._update_guild_setting(self.guild_id, self.guild_name, self.settings)
-        
-        if success:
-            # Update button states
-            button.disabled = True
-            for child in self.children:
-                if isinstance(child, discord.ui.Button) and child.label == "Disable":
-                    child.disabled = False
-            
-            # Update embed
-            embed = interaction.message.embeds[0]
-            for i, field in enumerate(embed.fields):
-                if field.name == "Status":
-                    embed.set_field_at(i, name="Status", value="🟢 **Enabled**", inline=True)
-            embed.set_footer(text=f"{FOOTER_TEXT} • Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
-            
-            await interaction.response.edit_message(embed=embed, view=self)
-            await interaction.followup.send("AI moderation has been enabled for this server.", ephemeral=True)
-        else:
-            await interaction.response.send_message("Failed to update settings. Please try again.", ephemeral=True)
+
+
+class ChannelModSettingsView(discord.ui.View):
+    """A view with interactive controls for channel-specific AI moderation settings."""
     
-    @discord.ui.button(label="Disable", style=discord.ButtonStyle.danger, row=0)
-    async def disable_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Disable AI moderation."""
-        # Update settings
-        self.settings["enabled"] = False
+    def __init__(self, cog, guild_id, channel_id, settings, override_enabled=False):
+        super().__init__(timeout=300)  # Settings panel available for 5 minutes
+        self.cog = cog
+        self.guild_id = guild_id
+        self.channel_id = channel_id
+        self.settings = settings.copy()  # Make a copy to avoid modifying the original
+        self.override_enabled = override_enabled
+        self.guild_name = ""
+        self.channel_name = ""
+        
+    async def on_timeout(self):
+        """Disable all components when the view times out."""
+        for item in self.children:
+            item.disabled = True
+    
+    @discord.ui.button(label="Enable Override", style=discord.ButtonStyle.primary, row=0)
+    async def enable_override_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Enable channel-specific overrides."""
+        # Get current channel name for logging
+        channel = interaction.guild.get_channel(self.channel_id)
+        self.channel_name = channel.name if channel else f"Channel {self.channel_id}"
         self.guild_name = interaction.guild.name if interaction.guild else ""
         
-        # Update database
-        success = await self.cog._update_guild_setting(self.guild_id, self.guild_name, self.settings)
+        try:
+            async with self.cog.bot.pool.acquire() as conn:
+                # Check if entry exists
+                row = await conn.fetchrow(
+                    """SELECT * FROM channel_mod_settings 
+                    WHERE guild_id = $1 AND channel_id = $2""",
+                    self.guild_id, self.channel_id
+                )
+                
+                if row:
+                    # Update existing entry
+                    await conn.execute(
+                        """UPDATE channel_mod_settings 
+                        SET override_enabled = true, updated_at = NOW()
+                        WHERE guild_id = $1 AND channel_id = $2""",
+                        self.guild_id, self.channel_id
+                    )
+                else:
+                    # Create new entry
+                    await conn.execute(
+                        """INSERT INTO channel_mod_settings
+                        (guild_id, channel_id, override_enabled, ai_moderation_enabled)
+                        VALUES ($1, $2, true, $3)""",
+                        self.guild_id, self.channel_id, self.settings["enabled"]
+                    )
+                
+                # Update our state
+                self.override_enabled = True
+                
+                # Update the embed to show overrides are active
+                embed = interaction.message.embeds[0]
+                
+                for i, field in enumerate(embed.fields):
+                    if field.name == "Override Status":
+                        embed.set_field_at(i, name="Override Status", value="✅ Active", inline=False)
+                        break
+                
+                # Update the UI and show success message
+                await interaction.response.edit_message(embed=embed, view=self)
+                await interaction.followup.send(
+                    f"Channel-specific moderation settings enabled for #{self.channel_name}", 
+                    ephemeral=True
+                )
+                
+                self.cog.logger.info(
+                    f"Channel overrides enabled for #{self.channel_name} in {self.guild_name} by {interaction.user.name}"
+                )
+                
+        except Exception as e:
+            self.cog.logger.error(f"Error enabling channel moderation override: {e}")
+            await interaction.response.send_message("An error occurred while updating settings", ephemeral=True)
+    
+    @discord.ui.button(label="Disable Override", style=discord.ButtonStyle.secondary, row=0)
+    async def disable_override_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Disable channel-specific overrides."""
+        # Get current channel name for logging
+        channel = interaction.guild.get_channel(self.channel_id)
+        self.channel_name = channel.name if channel else f"Channel {self.channel_id}"
+        self.guild_name = interaction.guild.name if interaction.guild else ""
         
-        if success:
-            # Update button states
-            button.disabled = True
-            for child in self.children:
-                if isinstance(child, discord.ui.Button) and child.label == "Enable":
-                    child.disabled = False
+        try:
+            async with self.cog.bot.pool.acquire() as conn:
+                # Update the settings
+                await conn.execute(
+                    """UPDATE channel_mod_settings 
+                    SET override_enabled = false, updated_at = NOW()
+                    WHERE guild_id = $1 AND channel_id = $2""",
+                    self.guild_id, self.channel_id
+                )
+                
+                # Update our state
+                self.override_enabled = False
+                
+                # Update the embed to show overrides are inactive
+                embed = interaction.message.embeds[0]
+                
+                for i, field in enumerate(embed.fields):
+                    if field.name == "Override Status":
+                        embed.set_field_at(i, name="Override Status", value="❌ Inactive", inline=False)
+                        break
+                
+                # Get the server-wide settings to show what will apply now
+                server_settings = await self.cog._get_guild_settings(self.guild_id)
+                
+                # Update other fields to reflect server settings
+                for i, field in enumerate(embed.fields):
+                    if field.name == "Moderation Status":
+                        status = "Enabled" if server_settings["enabled"] else "Disabled"
+                        embed.set_field_at(
+                            i, 
+                            name="Moderation Status",
+                            value=f"{'🟢' if server_settings['enabled'] else '🔴'} **{status}**",
+                            inline=True
+                        )
+                    elif field.name == "Temperature":
+                        embed.set_field_at(
+                            i,
+                            name="Temperature",
+                            value=f"**{server_settings['temperature']:.1f}**",
+                            inline=True
+                        )
+                    elif field.name == "Actions":
+                        embed.set_field_at(
+                            i,
+                            name="Actions",
+                            value=(
+                                f"**Low Severity:** {server_settings['low_severity_action']}\n"
+                                f"**Medium Severity:** {server_settings['med_severity_action']}\n"
+                                f"**High Severity:** {server_settings['high_severity_action']}"
+                            ),
+                            inline=False
+                        )
+                
+                # Update the UI and show success message
+                await interaction.response.edit_message(embed=embed, view=self)
+                await interaction.followup.send(
+                    f"Channel-specific moderation settings disabled for #{self.channel_name}", 
+                    ephemeral=True
+                )
+                
+                self.cog.logger.info(
+                    f"Channel overrides disabled for #{self.channel_name} in {self.guild_name} by {interaction.user.name}"
+                )
+                
+        except Exception as e:
+            self.cog.logger.error(f"Error disabling channel moderation override: {e}")
+            await interaction.response.send_message("An error occurred while updating settings", ephemeral=True)
             
-            # Update embed
+    @discord.ui.button(label="Enable Moderation", style=discord.ButtonStyle.success, row=1)
+    async def enable_moderation_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Enable AI moderation for this channel."""
+        # Check if override is enabled
+        if not self.override_enabled:
+            await interaction.response.send_message(
+                "You need to enable channel overrides first before changing settings.", 
+                ephemeral=True
+            )
+            return
+
+        # Get channel and guild names
+        channel = interaction.guild.get_channel(self.channel_id)
+        self.channel_name = channel.name if channel else f"Channel {self.channel_id}"
+        self.guild_name = interaction.guild.name if interaction.guild else ""
+        
+        try:
+            # Update settings in database
+            async with self.cog.bot.pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE channel_mod_settings 
+                    SET ai_moderation_enabled = true, updated_at = NOW()
+                    WHERE guild_id = $1 AND channel_id = $2""",
+                    self.guild_id, self.channel_id
+                )
+            
+            # Update local settings
+            self.settings["enabled"] = True
+            
+            # Update UI
             embed = interaction.message.embeds[0]
             for i, field in enumerate(embed.fields):
-                if field.name == "Status":
-                    embed.set_field_at(i, name="Status", value="🔴 **Disabled**", inline=True)
-            embed.set_footer(text=f"{FOOTER_TEXT} • Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
+                if field.name == "Moderation Status":
+                    embed.set_field_at(i, name="Moderation Status", value="🟢 **Enabled**", inline=True)
+                    break
             
+            # Update the message
             await interaction.response.edit_message(embed=embed, view=self)
-            await interaction.followup.send("AI moderation has been disabled for this server.", ephemeral=True)
-        else:
-            await interaction.response.send_message("Failed to update settings. Please try again.", ephemeral=True)
+            await interaction.followup.send(
+                f"AI moderation enabled for #{self.channel_name}", 
+                ephemeral=True
+            )
             
-    @discord.ui.button(label="Stricter (0.2)", style=discord.ButtonStyle.secondary, row=1)
-    async def stricter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Set stricter moderation (lower temperature)."""
-        # Update settings
-        self.settings["temperature"] = 0.2
+            self.cog.logger.info(
+                f"Channel AI moderation enabled for #{self.channel_name} in {self.guild_name} by {interaction.user.name}"
+            )
+            
+        except Exception as e:
+            self.cog.logger.error(f"Error enabling channel AI moderation: {e}")
+            await interaction.response.send_message("An error occurred while updating settings", ephemeral=True)
+    
+    @discord.ui.button(label="Disable Moderation", style=discord.ButtonStyle.danger, row=1)
+    async def disable_moderation_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Disable AI moderation for this channel."""
+        # Check if override is enabled
+        if not self.override_enabled:
+            await interaction.response.send_message(
+                "You need to enable channel overrides first before changing settings.", 
+                ephemeral=True
+            )
+            return
+
+        # Get channel and guild names
+        channel = interaction.guild.get_channel(self.channel_id)
+        self.channel_name = channel.name if channel else f"Channel {self.channel_id}"
         self.guild_name = interaction.guild.name if interaction.guild else ""
         
-        # Update database
-        success = await self.cog._update_guild_setting(self.guild_id, self.guild_name, self.settings)
+        try:
+            # Update settings in database
+            async with self.cog.bot.pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE channel_mod_settings 
+                    SET ai_moderation_enabled = false, updated_at = NOW()
+                    WHERE guild_id = $1 AND channel_id = $2""",
+                    self.guild_id, self.channel_id
+                )
+            
+            # Update local settings
+            self.settings["enabled"] = False
+            
+            # Update UI
+            embed = interaction.message.embeds[0]
+            for i, field in enumerate(embed.fields):
+                if field.name == "Moderation Status":
+                    embed.set_field_at(i, name="Moderation Status", value="🔴 **Disabled**", inline=True)
+                    break
+            
+            # Update the message
+            await interaction.response.edit_message(embed=embed, view=self)
+            await interaction.followup.send(
+                f"AI moderation disabled for #{self.channel_name}", 
+                ephemeral=True
+            )
+            
+            self.cog.logger.info(
+                f"Channel AI moderation disabled for #{self.channel_name} in {self.guild_name} by {interaction.user.name}"
+            )
+            
+        except Exception as e:
+            self.cog.logger.error(f"Error disabling channel AI moderation: {e}")
+            await interaction.response.send_message("An error occurred while updating settings", ephemeral=True)
+    
+    @discord.ui.button(label="Stricter (0.2)", style=discord.ButtonStyle.secondary, row=2)
+    async def stricter_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Set stricter moderation (lower temperature) for this channel."""
+        # Check if override is enabled
+        if not self.override_enabled:
+            await interaction.response.send_message(
+                "You need to enable channel overrides first before changing settings.", 
+                ephemeral=True
+            )
+            return
         
-        if success:
-            # Update embed
+        # Get channel and guild names
+        channel = interaction.guild.get_channel(self.channel_id)
+        self.channel_name = channel.name if channel else f"Channel {self.channel_id}"
+        self.guild_name = interaction.guild.name if interaction.guild else ""
+        
+        try:
+            # Update settings in database
+            async with self.cog.bot.pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE channel_mod_settings 
+                    SET ai_temperature_threshold = 0.2, updated_at = NOW()
+                    WHERE guild_id = $1 AND channel_id = $2""",
+                    self.guild_id, self.channel_id
+                )
+            
+            # Update local settings
+            self.settings["temperature"] = 0.2
+            
+            # Update UI
             embed = interaction.message.embeds[0]
             for i, field in enumerate(embed.fields):
                 if field.name == "Temperature":
                     embed.set_field_at(i, name="Temperature", value=f"**{self.settings['temperature']:.1f}**", inline=True)
-            embed.set_footer(text=f"{FOOTER_TEXT} • Last updated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M')} UTC")
+                    break
             
+            # Update the message
             await interaction.response.edit_message(embed=embed, view=self)
-            await interaction.followup.send("AI moderation temperature set to 0.2 (stricter).", ephemeral=True)
-        else:
-            await interaction.response.send_message("Failed to update settings. Please try again.", ephemeral=True)
+            await interaction.followup.send(
+                f"AI moderation strictness set to 0.2 (stricter) for #{self.channel_name}", 
+                ephemeral=True
+            )
             
-    @discord.ui.button(label="Balanced (0.4)", style=discord.ButtonStyle.secondary, row=1)
+        except Exception as e:
+            self.cog.logger.error(f"Error updating channel temperature: {e}")
+            await interaction.response.send_message("An error occurred while updating settings", ephemeral=True)
+            
+    @discord.ui.button(label="Balanced (0.4)", style=discord.ButtonStyle.secondary, row=2)
     async def balanced_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        """Set balanced moderation (medium temperature)."""
-        # Update settings
-        self.settings["temperature"] = 0.4
+        """Set balanced moderation (medium temperature) for this channel."""
+        # Check if override is enabled
+        if not self.override_enabled:
+            await interaction.response.send_message(
+                "You need to enable channel overrides first before changing settings.", 
+                ephemeral=True
+            )
+            return
+        
+        # Get channel and guild names
+        channel = interaction.guild.get_channel(self.channel_id)
+        self.channel_name = channel.name if channel else f"Channel {self.channel_id}"
         self.guild_name = interaction.guild.name if interaction.guild else ""
+        
+        try:
+            # Update settings in database
+            async with self.cog.bot.pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE channel_mod_settings 
+                    SET ai_temperature_threshold = 0.4, updated_at = NOW()
+                    WHERE guild_id = $1 AND channel_id = $2""",
+                    self.guild_id, self.channel_id
+                )
+            
+            # Update local settings
+            self.settings["temperature"] = 0.4
+            
+            # Update UI
+            embed = interaction.message.embeds[0]
+            for i, field in enumerate(embed.fields):
+                if field.name == "Temperature":
+                    embed.set_field_at(i, name="Temperature", value=f"**{self.settings['temperature']:.1f}**", inline=True)
+                    break
+            
+            # Update the message
+            await interaction.response.edit_message(embed=embed, view=self)
+            await interaction.followup.send(
+                f"AI moderation strictness set to 0.4 (balanced) for #{self.channel_name}", 
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            self.cog.logger.error(f"Error updating channel temperature: {e}")
+            await interaction.response.send_message("An error occurred while updating settings", ephemeral=True)
+            
+    @discord.ui.button(label="Lenient (0.7)", style=discord.ButtonStyle.secondary, row=2)
+    async def lenient_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        """Set lenient moderation (higher temperature) for this channel."""
+        # Check if override is enabled
+        if not self.override_enabled:
+            await interaction.response.send_message(
+                "You need to enable channel overrides first before changing settings.", 
+                ephemeral=True
+            )
+            return
+        
+        # Get channel and guild names
+        channel = interaction.guild.get_channel(self.channel_id)
+        self.channel_name = channel.name if channel else f"Channel {self.channel_id}"
+        self.guild_name = interaction.guild.name if interaction.guild else ""
+        
+        try:
+            # Update settings in database
+            async with self.cog.bot.pool.acquire() as conn:
+                await conn.execute(
+                    """UPDATE channel_mod_settings 
+                    SET ai_temperature_threshold = 0.7, updated_at = NOW()
+                    WHERE guild_id = $1 AND channel_id = $2""",
+                    self.guild_id, self.channel_id
+                )
+            
+            # Update local settings
+            self.settings["temperature"] = 0.7
+            
+            # Update UI
+            embed = interaction.message.embeds[0]
+            for i, field in enumerate(embed.fields):
+                if field.name == "Temperature":
+                    embed.set_field_at(i, name="Temperature", value=f"**{self.settings['temperature']:.1f}**", inline=True)
+                    break
+            
+            # Update the message
+            await interaction.response.edit_message(embed=embed, view=self)
+            await interaction.followup.send(
+                f"AI moderation strictness set to 0.7 (lenient) for #{self.channel_name}", 
+                ephemeral=True
+            )
+            
+        except Exception as e:
+            self.cog.logger.error(f"Error updating channel temperature: {e}")
+            await interaction.response.send_message("An error occurred while updating settings", ephemeral=True)
         
         # Update database
         success = await self.cog._update_guild_setting(self.guild_id, self.guild_name, self.settings)
@@ -251,13 +563,14 @@ class TestModerationModal(discord.ui.Modal, title="Test AI Moderation"):
 class ModFeedbackView(discord.ui.View):
     """A view with buttons for users to provide feedback on moderation actions."""
     
-    def __init__(self, cog, user_id, reason, message_content):
+    def __init__(self, cog, user_id, reason, message_content, violation_id=None):
         super().__init__(timeout=None)  # No timeout - persist until acknowledged
         self.cog = cog
         self.user_id = user_id
         self.reason = reason
         self.message_content = message_content
         self.feedback_logged = False
+        self.violation_id = violation_id  # Store the violation ID to link feedback
     
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         """Only allow the affected user to use these buttons."""
@@ -280,12 +593,24 @@ class ModFeedbackView(discord.ui.View):
             await interaction.message.edit(view=self, embed=embed)
             
             # Open appeal modal
-            await interaction.response.send_modal(AppealModal(self.cog, self.message_content, self.reason))
+            await interaction.response.send_modal(AppealModal(self.cog, self.message_content, self.reason, self.violation_id))
             self.cog.logger.info(f"User {interaction.user.name} ({interaction.user.id}) started appeal process for: {self.reason}")
             self.feedback_logged = True
             
             # Record acknowledgment in database
             await self.cog._record_acknowledgment(interaction.guild.id, interaction.user.id, "appealed")
+            
+            # Record initial feedback entry in the new feedback table
+            if self.violation_id:
+                try:
+                    async with self.cog.bot.pool.acquire() as conn:
+                        await conn.execute("""
+                            INSERT INTO ai_mod_feedback 
+                            (violation_id, user_id, guild_id, feedback_type, created_at)
+                            VALUES ($1, $2, $3, $4, NOW())
+                        """, self.violation_id, interaction.user.id, interaction.guild.id, "appeal")
+                except Exception as db_error:
+                    self.cog.logger.error(f"Error recording feedback in database: {db_error}")
             
         except discord.errors.HTTPException as e:
             # Handle any HTTP errors (like label length)
@@ -338,11 +663,12 @@ class AppealModal(discord.ui.Modal, title="Appeal Moderation Decision"):
         max_length=1000
     )
     
-    def __init__(self, cog, original_message, removal_reason):
+    def __init__(self, cog, original_message, removal_reason, violation_id=None):
         super().__init__()
         self.cog = cog
         self.original_message = original_message
         self.removal_reason = removal_reason
+        self.violation_id = violation_id  # Store the violation ID to update feedback
     
     async def on_submit(self, interaction: discord.Interaction):
         """Process the submitted appeal."""
@@ -355,6 +681,29 @@ class AppealModal(discord.ui.Modal, title="Appeal Moderation Decision"):
             appeal_id = f"appeal-{int(time.time())}"
             
             self.cog.logger.info(f"[{appeal_id}] New appeal from {user.name} ({user.id}) in {guild.name if guild else 'Unknown'} | Channel: {channel.name if channel else 'Unknown'}")
+            
+            # Update the feedback text in database if a violation ID was provided
+            if self.violation_id:
+                try:
+                    async with self.cog.bot.pool.acquire() as conn:
+                        # Update the existing feedback entry with the detailed text
+                        await conn.execute("""
+                            UPDATE ai_mod_feedback 
+                            SET feedback_text = $1, updated_at = NOW()
+                            WHERE violation_id = $2 AND user_id = $3 AND feedback_type = 'appeal'
+                        """, appeal_text, self.violation_id, user.id)
+                        
+                        # Update guild moderation stats to count the appeal
+                        await conn.execute("""
+                            INSERT INTO guild_mod_stats (guild_id, appeals_received)
+                            VALUES ($1, 1)
+                            ON CONFLICT (guild_id) DO UPDATE
+                            SET appeals_received = guild_mod_stats.appeals_received + 1,
+                                updated_at = NOW()
+                        """, guild.id)
+                        
+                except Exception as db_error:
+                    self.cog.logger.error(f"Error updating feedback in database: {db_error}")
             
             # Create an embed for staff to review with a more structured layout
             embed = discord.Embed(
@@ -389,6 +738,8 @@ class AppealModal(discord.ui.Modal, title="Appeal Moderation Decision"):
             embed.add_field(name="Original Message", value=formatted_msg, inline=False)
             embed.add_field(name="Removal Reason", value=self.removal_reason or "No specific reason provided", inline=False)
             embed.add_field(name="User's Appeal", value=appeal_text, inline=False)
+            embed.add_field(name="Appeal ID", value=appeal_id, inline=True)
+            embed.add_field(name="Violation ID", value=str(self.violation_id) if self.violation_id else "Unknown", inline=True)
             
             # Add thumbnail of the user's avatar
             if user.avatar:
@@ -540,31 +891,31 @@ class AIModeration(commands.Cog):
     Configurable per server with the /disabletheta command.
     """
     
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot) -> None:
         self.bot = bot
         self.logger = logging.getLogger('aimoderation')
+        self.enabled = True  # AI moderation enabled by default
+        self.model = os.getenv("Local_model", "lap2004_DeepSeek-R1-chatbot")
+        self.api_url = os.getenv("AI_API_URL", "http://127.0.0.1:5000")
+        self.api_path = os.getenv("ai_api_path", "/v1/chat/completions")
+        self.gpu_available = False  # Will be set by hardware detection
         
-        # System metrics tracking
-        self.inference_times = []  # Track recent inference times
-        self.last_status_check = None
-        self.connection_status = "Unknown"
+        # Initialize statistics counters
         self.stats = {
             "messages_analyzed": 0,
             "messages_flagged": 0,
-            "avg_inference_ms": 0,
-            "connection_errors": 0,
-            "last_connection_check": None,
+            "avg_inference_time": 0.0,
+            "started_at": datetime.now().isoformat()
         }
+        self.inference_times = []  # List to track individual inference times
         
-        # Load AI configuration from environment variables
-        self.model = os.getenv("Local_model")
-        self.api_url = os.getenv("AI_API_URL")
-        self.api_path = os.getenv("ai_api_path")
+        # Set up data export directory paths
+        self.data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'user_data')
+        self.logs_dir = os.path.join(self.data_dir, 'logs')
         
-        # Hardware detection for optimization
-        self.gpu_available = False
-        self.memory_available = 0
+        # Initialize hardware info variables
         self.cpu_cores = 0
+        self.gpu_available = False
         self.detect_hardware()
         
         if not all([self.model, self.api_url, self.api_path]):
@@ -862,11 +1213,37 @@ class AIModeration(commands.Cog):
         self.logger.error(f"❌ Failed to connect to AI service after {max_retries} attempts")
         return False
     
-    async def is_ai_moderation_enabled(self, guild_id: int) -> bool:
-        """Check if AI moderation is enabled for this guild."""
+    async def is_ai_moderation_enabled(self, guild_id: int, channel_id: int = None) -> bool:
+        """Check if AI moderation is enabled for this guild and channel.
+        
+        Args:
+            guild_id: The guild ID
+            channel_id: Optional channel ID to check channel-specific settings
+            
+        Returns:
+            bool: Whether AI moderation is enabled
+        """
         if not self.enabled or not self.bot.pool:
             return False
             
+        # First check channel overrides if channel_id is provided
+        if channel_id:
+            try:
+                async with self.bot.pool.acquire() as conn:
+                    row = await conn.fetchrow(
+                        """SELECT override_enabled, ai_moderation_enabled 
+                        FROM channel_mod_settings 
+                        WHERE guild_id = $1 AND channel_id = $2""",
+                        guild_id, channel_id
+                    )
+                    
+                    if row and row["override_enabled"]:
+                        self.logger.debug(f"Using channel-specific moderation settings for channel {channel_id}")
+                        return row["ai_moderation_enabled"]
+            except Exception as e:
+                self.logger.error(f"Error checking channel moderation settings: {e}")
+        
+        # Fall back to guild settings
         async with self.bot.pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT ai_moderation_enabled FROM general_server WHERE guild_id = $1",
@@ -920,7 +1297,8 @@ class AIModeration(commands.Cog):
             self.logger.error(f"Failed to log moderation action: {e}")
             
     async def analyze_message(self, message_content: str, guild_id: int = None, channel_id: int = None, 
-                           message_id: int = None, author_id: int = None, debug_mode: bool = False) -> tuple[bool, float, str]:
+                           message_id: int = None, author_id: int = None, debug_mode: bool = False,
+                           system_override: str = None, response_format: str = "json") -> tuple[bool, float, str]:
         """Analyze a message using the AI model to determine if it's inappropriate.
         
         Args:
@@ -930,9 +1308,13 @@ class AIModeration(commands.Cog):
             message_id: Optional message ID for tracking
             author_id: Optional author ID for context
             debug_mode: If True, enables verbose logging of the AI response
+            system_override: Optional custom system message to override the default moderation prompt
+            response_format: Format for the response, either "json" or "text"
             
         Returns:
             tuple: (is_inappropriate, confidence, reason)
+              When response_format is "json", reason contains a JSON structure
+              When response_format is "text", reason contains the full text response
         """
         if not self.enabled or not message_content.strip():
             return False, 0.0, ""
@@ -958,19 +1340,23 @@ class AIModeration(commands.Cog):
                                                                settings["context_message_count"])
                 self.logger.debug(f"[{request_id}] Retrieved {len(context_messages)} context messages")
             
-            # Create a richer system prompt based on available context
-            system_content = "You are an AI moderator for a Discord server. Your job is to analyze "
-            
-            if context_messages:
-                system_content += "the message in context and determine if it contains inappropriate content. "
-                system_content += "Consider the conversation context when making your determination. "
+            # Create a system prompt based on available context or use override if provided
+            if system_override:
+                system_content = system_override
             else:
-                system_content += "the following message and determine if it contains inappropriate content. "
+                # Default moderation system prompt
+                system_content = "You are an AI moderator for a Discord server. Your job is to analyze "
                 
-            system_content += "Look for hate speech, harassment, racism, sexism, threats, extreme profanity, "
-            system_content += "or other harmful content. Respond with a JSON object with three fields: "
-            system_content += "'inappropriate' (boolean), 'confidence' (float between 0 and 1), and "
-            system_content += "'reason' (brief explanation if inappropriate)."
+                if context_messages:
+                    system_content += "the message in context and determine if it contains inappropriate content. "
+                    system_content += "Consider the conversation context when making your determination. "
+                else:
+                    system_content += "the following message and determine if it contains inappropriate content. "
+                    
+                system_content += "Look for hate speech, harassment, racism, sexism, threats, extreme profanity, "
+                system_content += "or other harmful content. Respond with a JSON object with three fields: "
+                system_content += "'inappropriate' (boolean), 'confidence' (float between 0 and 1), and "
+                system_content += "'reason' (brief explanation if inappropriate)."
             
             # Define the prompt for DeepSeek model
             prompt = [
@@ -1004,9 +1390,13 @@ class AIModeration(commands.Cog):
                 "model": self.model,
                 "messages": prompt,
                 "temperature": temperature,  # Use server-specific temperature
-                "max_tokens": max_tokens,
-                "response_format": {"type": "json_object"}
+                "max_tokens": max_tokens
             }
+            
+            # Set response format based on parameter
+            if response_format == "json":
+                payload["response_format"] = {"type": "json_object"}
+            # For text response, don't specify a format constraint
             
             # Add hardware-specific optimization parameters if available
             if self.gpu_available:
@@ -1154,36 +1544,45 @@ class AIModeration(commands.Cog):
             response_to_process = content or raw_response
             
             if response_to_process and response_to_process.strip():
-                try:
-                    # Use our enhanced JSON extraction method with multiple fallback strategies
-                    cleaned_json = self._extract_json_from_response(response_to_process)
-                    self.logger.debug(f"[{request_id}] Processed content for parsing: {cleaned_json[:100]}...")
+                # Handle different response formats
+                if response_format == "text":
+                    # For text format, just return the raw content
+                    is_inappropriate = False  # Not doing moderation
+                    confidence = 1.0  # High confidence in the response itself
+                    reason = response_to_process  # Return the full text response
                     
-                    # Parse the cleaned JSON
-                    result = json.loads(cleaned_json)
-                    
-                    # Extract values with safety checks and ensure all fields are present
-                    is_inappropriate = result.get("inappropriate", False)
-                    confidence = result.get("confidence", 0.0)
-                    reason = result.get("reason", "")
-                    
-                    self.logger.info(f"[{request_id}] Analysis result: inappropriate={is_inappropriate}, "
-                                  f"confidence={confidence:.2%}, reason='{reason}'")
-                                  
-                except json.JSONDecodeError as e:
-                    # This is unlikely since _extract_json_from_response already handles JSON errors,
-                    # but adding as a safeguard
-                    self.logger.error(f"[{request_id}] Final JSON parse error after extraction: {e}")
-                    
-                    # Use smart content analysis as last resort
-                    is_inappropriate = any(word in response_to_process.lower() for word in 
-                                        ["inappropriate", "harmful", "offensive", "profanity", 
-                                         "hate speech", "violent"])
-                    confidence = 0.65  # Conservative confidence for fallback
-                    reason = "Content flagged by fallback detection system"
-                    
-                    self.logger.warning(f"[{request_id}] Using last resort fallback: inappropriate={is_inappropriate}, "
-                                    f"confidence={confidence:.2%}, reason='{reason}'")
+                    self.logger.debug(f"[{request_id}] Returning text response format, length: {len(reason)}")
+                else:  # Default JSON processing
+                    try:
+                        # Use our enhanced JSON extraction method with multiple fallback strategies
+                        cleaned_json = self._extract_json_from_response(response_to_process)
+                        self.logger.debug(f"[{request_id}] Processed content for parsing: {cleaned_json[:100]}...")
+                        
+                        # Parse the cleaned JSON
+                        result = json.loads(cleaned_json)
+                        
+                        # Extract values with safety checks and ensure all fields are present
+                        is_inappropriate = result.get("inappropriate", False)
+                        confidence = result.get("confidence", 0.0)
+                        reason = result.get("reason", "")
+                        
+                        self.logger.info(f"[{request_id}] Analysis result: inappropriate={is_inappropriate}, "
+                                      f"confidence={confidence:.2%}, reason='{reason}'")
+                                      
+                    except json.JSONDecodeError as e:
+                        # This is unlikely since _extract_json_from_response already handles JSON errors,
+                        # but adding as a safeguard
+                        self.logger.error(f"[{request_id}] Final JSON parse error after extraction: {e}")
+                        
+                        # Use smart content analysis as last resort
+                        is_inappropriate = any(word in response_to_process.lower() for word in 
+                                            ["inappropriate", "harmful", "offensive", "profanity", 
+                                             "hate speech", "violent"])
+                        confidence = 0.65  # Conservative confidence for fallback
+                        reason = "Content flagged by fallback detection system"
+                        
+                        self.logger.warning(f"[{request_id}] Using last resort fallback: inappropriate={is_inappropriate}, "
+                                        f"confidence={confidence:.2%}, reason='{reason}'")
             else:
                 self.logger.error(f"[{request_id}] No processable content received from AI service")
             
@@ -1201,22 +1600,533 @@ class AIModeration(commands.Cog):
             return False, 0.0, ""
     
     @commands.Cog.listener()
+    async def on_disconnect(self):
+        """Handle shutdown tasks like data export."""
+        self.logger.info("Bot disconnected, triggering data export")
+        await self._export_all_data()
+    
+    @commands.Cog.listener()    
+    async def on_close(self):
+        """Handle close event for data export."""
+        self.logger.info("Bot closing, triggering data export")
+        await self._export_all_data()
+        
+    async def _export_all_data(self):
+        """Export all data on shutdown."""
+        try:
+            # Create directories if they don't exist
+            os.makedirs(self.data_dir, exist_ok=True)
+            os.makedirs(self.logs_dir, exist_ok=True)
+            
+            # Export user data
+            await self.export_user_data()
+            
+            # Export AI metrics
+            self.export_ai_metrics()
+            
+            self.logger.info(f"Data exported to {self.data_dir}")
+        except Exception as e:
+            self.logger.error(f"Error during data export: {e}")
+    
+    async def export_user_data(self):
+        """Export user profile data including risk levels to CSV."""
+        # Ensure export directories exist
+        os.makedirs(self.data_dir, exist_ok=True)
+        os.makedirs(self.logs_dir, exist_ok=True)
+        
+        # Define all file paths that need to be created
+        user_data_path = os.path.join(self.data_dir, 'user_profiles.csv')
+        user_data_simple_path = os.path.join(self.data_dir, 'user_profiles_simple.csv')
+        cross_server_path = os.path.join(self.data_dir, 'cross_server_behavior.csv')
+        violations_path = os.path.join(self.data_dir, 'ai_violations.csv')
+        guild_stats_path = os.path.join(self.data_dir, 'guild_mod_stats.csv')
+        mod_feedback_path = os.path.join(self.data_dir, 'mod_feedback.csv')
+        
+        # Create empty CSV files with headers if database is not available
+        if not self.bot.pool:
+            self.logger.warning("Database not available - creating empty export files")
+            
+            # Create user_profiles.csv with headers
+            with open(user_data_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['user_id', 'username', 'guilds', 'risk_level', 'risk_score', 'risk_factors', 'updated_at']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+            
+            # Create user_profiles_simple.csv with headers
+            with open(user_data_simple_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['user_id', 'username', 'guilds', 'risk_level', 'risk_score', 'risk_factors', 'updated_at']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+            # Create cross_server_behavior.csv with headers
+            with open(cross_server_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['user_id', 'username', 'server_count', 'guilds', 'violation_count', 'risk_level']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+            # Create ai_violations.csv with headers
+            with open(violations_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['violation_id', 'guild_id', 'guild_name', 'user_id', 'username', 'channel_id', 
+                              'violation_type', 'confidence', 'message_content', 'has_context', 'reason', 
+                              'action_taken', 'is_false_positive', 'created_at']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+            # Create guild_mod_stats.csv with headers
+            with open(guild_stats_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['guild_id', 'total_messages_analyzed', 'flagged_messages', 'false_positives', 
+                              'true_positives', 'appeals_received', 'appeals_accepted', 'updated_at']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+            # Create mod_feedback.csv with headers
+            with open(mod_feedback_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = ['feedback_id', 'violation_id', 'user_id', 'guild_id', 'feedback_type', 
+                              'feedback_text', 'review_status', 'created_at']
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                writer.writeheader()
+                
+            self.logger.info(f"Created empty export files in {self.data_dir} (database not available)")
+            return
+        
+        # Database is available, try to export data
+        try:
+            async with self.bot.pool.acquire() as conn:
+                # Check if user_profiles table exists
+                try:
+                    table_exists = await conn.fetchval(
+                        """SELECT EXISTS (SELECT 1 FROM information_schema.tables 
+                           WHERE table_schema = 'public' AND table_name = $1)""", 
+                        "user_profiles"
+                    )
+                except Exception:
+                    table_exists = False
+                
+                if not table_exists:
+                    self.logger.warning("user_profiles table does not exist - creating empty files")
+                    
+                    # Create user_profiles.csv with headers
+                    with open(user_data_path, 'w', newline='', encoding='utf-8') as csvfile:
+                        fieldnames = ['user_id', 'username', 'guilds', 'risk_level', 'risk_score', 'risk_factors', 'updated_at']
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                    
+                    # Create user_profiles_simple.csv with headers
+                    with open(user_data_simple_path, 'w', newline='', encoding='utf-8') as csvfile:
+                        fieldnames = ['user_id', 'username', 'guilds', 'risk_level', 'risk_score', 'risk_factors', 'updated_at']
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                    
+                    self.logger.info(f"Created empty user profile files (table does not exist)")
+                    return
+                
+                # Get all user profiles with risk data
+                rows = await conn.fetch(
+                    """SELECT user_id, username, guilds, risk_assessment, risk_score, risk_factors, 
+                    profile_updated_at FROM user_profiles"""
+                )
+                
+                # Create user_profiles.csv even if no data is available
+                with open(user_data_path, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['user_id', 'username', 'guilds', 'risk_level', 'risk_score', 'risk_factors', 'updated_at']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                    if rows:
+                        for row in rows:
+                            # Format JSON properly with triple quotes as required in examples
+                            guilds_str = json.dumps(row['guilds']) if row['guilds'] else '[]'
+                            risk_factors_str = json.dumps(row['risk_factors']) if row['risk_factors'] else '[]'
+                            
+                            writer.writerow({
+                                'user_id': row['user_id'],
+                                'username': row['username'],
+                                'guilds': f'"""{guilds_str}"""',  # Triple-quoted JSON format
+                                'risk_level': row['risk_assessment'] or 'UNKNOWN',
+                                'risk_score': row['risk_score'] or 0.0,
+                                'risk_factors': f'"""{risk_factors_str}"""',  # Triple-quoted JSON format
+                                'updated_at': row['profile_updated_at'].isoformat() if row['profile_updated_at'] else ''
+                            })
+                
+                # Create user_profiles_simple.csv (same format but with a different name)
+                with open(user_data_simple_path, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['user_id', 'username', 'guilds', 'risk_level', 'risk_score', 'risk_factors', 'updated_at']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                    if rows:
+                        for row in rows:
+                            # Format JSON properly with triple quotes as required in examples
+                            guilds_str = json.dumps(row['guilds']) if row['guilds'] else '[]'
+                            risk_factors_str = json.dumps(row['risk_factors']) if row['risk_factors'] else '[]'
+                            
+                            writer.writerow({
+                                'user_id': row['user_id'],
+                                'username': row['username'],
+                                'guilds': f'"""{guilds_str}"""',  # Triple-quoted JSON format
+                                'risk_level': row['risk_assessment'] or 'UNKNOWN',
+                                'risk_score': row['risk_score'] or 0.0,
+                                'risk_factors': f'"""{risk_factors_str}"""',  # Triple-quoted JSON format
+                                'updated_at': row['profile_updated_at'].isoformat() if row['profile_updated_at'] else ''
+                            })
+                
+                # Create cross_server_behavior.csv
+                with open(cross_server_path, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['user_id', 'username', 'server_count', 'guilds', 'violation_count', 'risk_level']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                    # Only export users in multiple servers
+                    if rows:
+                        multi_server_users = [row for row in rows if row['guilds'] and len(row['guilds']) > 1]
+                        for row in multi_server_users:
+                            guilds_str = json.dumps(row['guilds']) if row['guilds'] else '[]'
+                            writer.writerow({
+                                'user_id': row['user_id'],
+                                'username': row['username'],
+                                'server_count': len(row['guilds']) if row['guilds'] else 0,
+                                'guilds': f'"""{guilds_str}"""',  # Triple-quoted JSON format
+                                'violation_count': 0,  # Default value since we're not calculating violations here
+                                'risk_level': row['risk_assessment'] or 'UNKNOWN'
+                            })
+                
+                self.logger.info(f"Exported user data files to {self.data_dir}")
+                
+                # Query and export data for ai_violations.csv
+                try:
+                    # Check if ai_mod_violations table exists
+                    violations_table_exists = await conn.fetchval(
+                        """SELECT EXISTS (SELECT 1 FROM information_schema.tables 
+                           WHERE table_schema = 'public' AND table_name = $1)""", 
+                        "ai_mod_violations"
+                    )
+                    
+                    if violations_table_exists:
+                        # Get violation data with enhanced details
+                        violations = await conn.fetch("""
+                            SELECT v.violation_id, v.guild_id, g.guild_name, v.user_id, u.username, 
+                            v.channel_id, v.violation_type, v.confidence, v.message_content, 
+                            v.context_messages, v.reason, v.action_taken, v.is_false_positive,
+                            v.confidence_categories, v.message_metadata, v.created_at
+                            FROM ai_mod_violations v
+                            LEFT JOIN general_server g ON v.guild_id = g.guild_id
+                            LEFT JOIN user_profiles u ON v.user_id = u.user_id
+                            ORDER BY v.created_at DESC
+                        """)
+                        
+                        # Write violations to CSV
+                        with open(violations_path, 'w', newline='', encoding='utf-8') as csvfile:
+                            fieldnames = ['violation_id', 'guild_id', 'guild_name', 'user_id', 'username', 'channel_id', 
+                                        'violation_type', 'confidence', 'message_content', 'has_context', 'reason', 
+                                        'action_taken', 'is_false_positive', 'confidence_details', 'message_metadata', 'created_at']
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer.writeheader()
+                            
+                            for row in violations:
+                                writer.writerow({
+                                    'violation_id': row['violation_id'],
+                                    'guild_id': row['guild_id'],
+                                    'guild_name': row['guild_name'] or f"Unknown Guild {row['guild_id']}",
+                                    'user_id': row['user_id'],
+                                    'username': row['username'] or f"Unknown User {row['user_id']}",
+                                    'channel_id': row['channel_id'],
+                                    'violation_type': row['violation_type'],
+                                    'confidence': row['confidence'],
+                                    'message_content': row['message_content'],
+                                    'has_context': 'Yes' if row['context_messages'] else 'No',
+                                    'reason': row['reason'] or '',
+                                    'action_taken': row['action_taken'],
+                                    'is_false_positive': 'Yes' if row['is_false_positive'] else 
+                                                       ('No' if row['is_false_positive'] is False else 'Unknown'),
+                                    'confidence_details': json.dumps(row['confidence_categories']) if row['confidence_categories'] else '',
+                                    'message_metadata': json.dumps(row['message_metadata']) if row['message_metadata'] else '',
+                                    'created_at': row['created_at'].isoformat() if row['created_at'] else ''
+                                })
+                            self.logger.info(f"Exported {len(violations)} AI moderation violations to {violations_path}")
+                    else:
+                        # Create empty violations file with headers
+                        with open(violations_path, 'w', newline='', encoding='utf-8') as csvfile:
+                            fieldnames = ['violation_id', 'guild_id', 'guild_name', 'user_id', 'username', 'channel_id', 
+                                        'violation_type', 'confidence', 'message_content', 'has_context', 'reason', 
+                                        'action_taken', 'is_false_positive', 'confidence_details', 'message_metadata', 'created_at']
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer.writeheader()
+                        self.logger.info(f"Created empty violations file (table does not exist)")
+                except Exception as e:
+                    self.logger.error(f"Error exporting violations data: {e}")
+                    # Create empty file as fallback
+                    with open(violations_path, 'w', newline='', encoding='utf-8') as csvfile:
+                        fieldnames = ['violation_id', 'guild_id', 'guild_name', 'user_id', 'username', 'channel_id', 
+                                    'violation_type', 'confidence', 'message_content', 'has_context', 'reason', 
+                                    'action_taken', 'is_false_positive', 'confidence_details', 'message_metadata', 'created_at']
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                
+                # Query and export data for guild_mod_stats.csv
+                try:
+                    # Check if guild_mod_stats table exists
+                    guild_stats_table_exists = await conn.fetchval(
+                        """SELECT EXISTS (SELECT 1 FROM information_schema.tables 
+                           WHERE table_schema = 'public' AND table_name = $1)""", 
+                        "guild_mod_stats"
+                    )
+                    
+                    if guild_stats_table_exists:
+                        # Get guild statistics data
+                        guild_stats = await conn.fetch("""
+                            SELECT guild_id, total_messages_analyzed, flagged_messages,
+                            false_positives, true_positives, appeals_received, appeals_accepted,
+                            violation_categories, updated_at
+                            FROM guild_mod_stats
+                        """)
+                        
+                        # Write guild stats to CSV
+                        with open(guild_stats_path, 'w', newline='', encoding='utf-8') as csvfile:
+                            fieldnames = ['guild_id', 'total_messages_analyzed', 'flagged_messages',
+                                        'false_positives', 'true_positives', 'appeals_received', 
+                                        'appeals_accepted', 'violation_categories', 'updated_at']
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer.writeheader()
+                            
+                            for row in guild_stats:
+                                writer.writerow({
+                                    'guild_id': row['guild_id'],
+                                    'total_messages_analyzed': row['total_messages_analyzed'],
+                                    'flagged_messages': row['flagged_messages'],
+                                    'false_positives': row['false_positives'],
+                                    'true_positives': row['true_positives'],
+                                    'appeals_received': row['appeals_received'],
+                                    'appeals_accepted': row['appeals_accepted'],
+                                    'violation_categories': json.dumps(row['violation_categories']) if row['violation_categories'] else '',
+                                    'updated_at': row['updated_at'].isoformat() if row['updated_at'] else ''
+                                })
+                            self.logger.info(f"Exported {len(guild_stats)} guild moderation stats to {guild_stats_path}")
+                    else:
+                        # Create empty guild stats file with headers
+                        with open(guild_stats_path, 'w', newline='', encoding='utf-8') as csvfile:
+                            fieldnames = ['guild_id', 'total_messages_analyzed', 'flagged_messages',
+                                        'false_positives', 'true_positives', 'appeals_received', 
+                                        'appeals_accepted', 'violation_categories', 'updated_at']
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer.writeheader()
+                        self.logger.info(f"Created empty guild stats file (table does not exist)")
+                except Exception as e:
+                    self.logger.error(f"Error exporting guild stats data: {e}")
+                    # Create empty file as fallback
+                    with open(guild_stats_path, 'w', newline='', encoding='utf-8') as csvfile:
+                        fieldnames = ['guild_id', 'total_messages_analyzed', 'flagged_messages',
+                                    'false_positives', 'true_positives', 'appeals_received', 
+                                    'appeals_accepted', 'violation_categories', 'updated_at']
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                
+                # Query and export data for mod_feedback.csv
+                try:
+                    # Check if ai_mod_feedback table exists
+                    feedback_table_exists = await conn.fetchval(
+                        """SELECT EXISTS (SELECT 1 FROM information_schema.tables 
+                           WHERE table_schema = 'public' AND table_name = $1)""", 
+                        "ai_mod_feedback"
+                    )
+                    
+                    if feedback_table_exists:
+                        # Get user feedback data
+                        feedback = await conn.fetch("""
+                            SELECT feedback_id, violation_id, user_id, guild_id,
+                            feedback_type, feedback_text, review_status, reviewer_id,
+                            review_notes, created_at, updated_at
+                            FROM ai_mod_feedback
+                            ORDER BY created_at DESC
+                        """)
+                        
+                        # Write feedback data to CSV
+                        with open(mod_feedback_path, 'w', newline='', encoding='utf-8') as csvfile:
+                            fieldnames = ['feedback_id', 'violation_id', 'user_id', 'guild_id',
+                                        'feedback_type', 'feedback_text', 'review_status',
+                                        'created_at', 'updated_at']
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer.writeheader()
+                            
+                            for row in feedback:
+                                writer.writerow({
+                                    'feedback_id': row['feedback_id'],
+                                    'violation_id': row['violation_id'],
+                                    'user_id': row['user_id'],
+                                    'guild_id': row['guild_id'],
+                                    'feedback_type': row['feedback_type'],
+                                    'feedback_text': row['feedback_text'] or '',
+                                    'review_status': row['review_status'],
+                                    'created_at': row['created_at'].isoformat() if row['created_at'] else '',
+                                    'updated_at': row['updated_at'].isoformat() if row['updated_at'] else ''
+                                })
+                            self.logger.info(f"Exported {len(feedback)} moderation feedback entries to {mod_feedback_path}")
+                    else:
+                        # Create empty feedback file with headers
+                        with open(mod_feedback_path, 'w', newline='', encoding='utf-8') as csvfile:
+                            fieldnames = ['feedback_id', 'violation_id', 'user_id', 'guild_id',
+                                        'feedback_type', 'feedback_text', 'review_status',
+                                        'created_at', 'updated_at']
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer.writeheader()
+                        self.logger.info(f"Created empty feedback file (table does not exist)")
+                except Exception as e:
+                    self.logger.error(f"Error exporting feedback data: {e}")
+                    # Create empty file as fallback
+                    with open(mod_feedback_path, 'w', newline='', encoding='utf-8') as csvfile:
+                        fieldnames = ['feedback_id', 'violation_id', 'user_id', 'guild_id',
+                                    'feedback_type', 'feedback_text', 'review_status',
+                                    'created_at', 'updated_at']
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                    
+        except Exception as e:
+            self.logger.error(f"Error exporting user data: {e}")
+            # Even if there's an error, create empty files as fallback
+            try:
+                # Create basic empty files
+                with open(user_data_path, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['user_id', 'username', 'guilds', 'risk_level', 'risk_score', 'risk_factors', 'updated_at']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                with open(user_data_simple_path, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['user_id', 'username', 'guilds', 'risk_level', 'risk_score', 'risk_factors', 'updated_at']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+                self.logger.info(f"Created empty user profile files after error: {e}")
+            except Exception as inner_e:
+                self.logger.error(f"Failed to create empty user profile files: {inner_e}")
+    
+    def export_ai_metrics(self):
+        """Export AI moderation metrics and stats to logs directory."""
+        # Ensure export directories exist
+        os.makedirs(self.data_dir, exist_ok=True)
+        os.makedirs(self.logs_dir, exist_ok=True)
+        try:
+            # Add end time and calculate duration
+            self.stats['ended_at'] = datetime.now(timezone.utc).isoformat()
+            
+            # Ensure consistent timezone handling by making both datetimes timezone-aware
+            start_time_str = self.stats.get('started_at', datetime.now(timezone.utc).isoformat())
+            
+            # Check if the start time has timezone info
+            if 'T' in start_time_str and ('+' in start_time_str or 'Z' in start_time_str):
+                # Already has timezone info
+                start_time = datetime.fromisoformat(start_time_str)
+            else:
+                # No timezone info - assume UTC
+                start_time = datetime.fromisoformat(start_time_str).replace(tzinfo=timezone.utc)
+                
+            # End time is already timezone-aware
+            end_time = datetime.fromisoformat(self.stats['ended_at'])
+            
+            # Calculate duration with both timezone-aware datetimes
+            duration = (end_time - start_time).total_seconds() / 3600  # hours
+            self.stats['duration_hours'] = round(duration, 2)
+            
+            # Create metrics file
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            metrics_path = os.path.join(self.logs_dir, f'ai_metrics_{timestamp}.json')
+            
+            # Add hardware info to stats
+            self.stats['system'] = platform.system()
+            self.stats['cpu_cores'] = self.cpu_cores
+            self.stats['gpu_available'] = self.gpu_available
+            self.stats['model'] = self.model
+            
+            # Calculate derived metrics
+            if self.stats.get('messages_analyzed', 0) > 0:
+                self.stats['flag_rate'] = round(self.stats.get('messages_flagged', 0) / self.stats['messages_analyzed'] * 100, 2)
+            else:
+                self.stats['flag_rate'] = 0.0
+                
+            # Convert any non-serializable objects (like datetime) to strings
+            serializable_stats = {}
+            for key, value in self.stats.items():
+                # Convert datetime objects to ISO format strings
+                if isinstance(value, datetime):
+                    serializable_stats[key] = value.isoformat()
+                else:
+                    serializable_stats[key] = value
+            
+            # Write to JSON file
+            with open(metrics_path, 'w', encoding='utf-8') as f:
+                json.dump(serializable_stats, f, indent=2)
+                
+            self.logger.info(f"Exported AI metrics to {metrics_path}")
+            
+            # Create additional metrics files based on standard naming for consistency
+            violations_path = os.path.join(self.data_dir, 'ai_violations.csv')
+            if not os.path.exists(violations_path):
+                with open(violations_path, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['violation_id', 'guild_id', 'guild_name', 'user_id', 'username', 'channel_id', 
+                                'violation_type', 'confidence', 'message_content', 'has_context', 'reason', 
+                                'action_taken', 'is_false_positive', 'created_at']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                    
+            # Create guild_mod_stats.csv if it doesn't exist
+            guild_stats_path = os.path.join(self.data_dir, 'guild_mod_stats.csv')
+            if not os.path.exists(guild_stats_path):
+                with open(guild_stats_path, 'w', newline='', encoding='utf-8') as csvfile:
+                    fieldnames = ['guild_id', 'total_messages_analyzed', 'flagged_messages', 'false_positives', 
+                                'true_positives', 'appeals_received', 'appeals_accepted', 'updated_at']
+                    writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                    writer.writeheader()
+                
+            return metrics_path
+                
+        except Exception as e:
+            self.logger.error(f"Error exporting AI metrics: {e}")
+            
+            # Create a minimal metrics file even if there's an error
+            try:
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                metrics_path = os.path.join(self.logs_dir, f'ai_metrics_{timestamp}.json')
+                
+                minimal_stats = {
+                    "messages_analyzed": 0,
+                    "messages_flagged": 0,
+                    "avg_inference_time": 0.0,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "last_connection_check": datetime.now(timezone.utc).isoformat(),
+                    "ended_at": datetime.now(timezone.utc).isoformat(),
+                    "duration_hours": 0.0,
+                    "system": platform.system(),
+                    "cpu_cores": getattr(self, 'cpu_cores', psutil.cpu_count(logical=False) or 1),
+                    "gpu_available": getattr(self, 'gpu_available', False),
+                    "model": getattr(self, 'model', 'unknown'),
+                    "flag_rate": 0.0
+                }
+                
+                with open(metrics_path, 'w', encoding='utf-8') as f:
+                    json.dump(minimal_stats, f, indent=2)
+                    
+                self.logger.info(f"Created minimal metrics file after error: {metrics_path}")
+                return metrics_path
+                
+            except Exception as inner_e:
+                self.logger.error(f"Failed to create minimal metrics file: {inner_e}")
+                return None
+    
+    @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         # Skip messages from bots, DMs, or empty content
         if message.author.bot or not message.guild or not message.content.strip():
             return
             
-        # Check if AI moderation is enabled for this guild
-        if not await self.is_ai_moderation_enabled(message.guild.id):
+        # Check if AI moderation is enabled for this guild and channel
+        if not await self.is_ai_moderation_enabled(message.guild.id, message.channel.id):
             return
         
         # Generate a debug ID for this message
         debug_id = f"msg-{message.id}"
         
         # Get guild settings
-        settings = await self._get_guild_settings(message.guild.id)
+        settings = await self._get_guild_settings(message.guild.id, message.channel.id)
             
-        # Analyze the message with server-specific settings and context
+        # Step 1: Analyze the individual message
         is_inappropriate, confidence, reason = await self.analyze_message(
             message_content=message.content,
             guild_id=message.guild.id,
@@ -1224,6 +2134,21 @@ class AIModeration(commands.Cog):
             message_id=message.id,
             author_id=message.author.id
         )
+        
+        # Step 2: If not flagged, also check message patterns (for split content evasion)
+        if not is_inappropriate and len(message.content) >= 5:
+            self.logger.debug(f"[{debug_id}] Individual message passed, checking message patterns")
+            pattern_inappropriate, pattern_confidence, pattern_reason = await self.analyze_user_message_patterns(
+                user_id=message.author.id, 
+                guild_id=message.guild.id
+            )
+            
+            # If pattern analysis found something, use those results instead
+            if pattern_inappropriate and pattern_confidence > confidence:
+                is_inappropriate = pattern_inappropriate
+                confidence = pattern_confidence
+                reason = f"Pattern detection: {pattern_reason}"
+                self.logger.info(f"[{debug_id}] Pattern detection flagged content: {reason}")
         
         # Early exit if not inappropriate
         if not is_inappropriate:
@@ -1515,7 +2440,7 @@ class AIModeration(commands.Cog):
                     guild_id, user_id
                 )
                 
-                now = datetime.utcnow()
+                now = datetime.now(timezone.utc)
                 
                 if row:
                     # User has previous violations
@@ -1647,9 +2572,111 @@ class AIModeration(commands.Cog):
         
         # Send the settings panel
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+    @app_commands.command(name="channelmod", description="Configure AI moderation settings for a specific channel")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(manage_guild=True)
+    async def channel_mod_settings(self, interaction: discord.Interaction, channel: discord.TextChannel = None):
+        """Configure channel-specific AI moderation settings.
+        
+        Args:
+            channel: The channel to configure. Defaults to the current channel.
+        """
+        await interaction.response.defer(ephemeral=True)
+        
+        if not self.bot.pool:
+            await interaction.followup.send("Database not configured, cannot access settings.", ephemeral=True)
+            return
+            
+        guild = interaction.guild
+        if not guild:
+            await interaction.followup.send("This command can only be used in a server.", ephemeral=True)
+            return
+            
+        # Default to current channel if not specified
+        target_channel = channel or interaction.channel
+        if not isinstance(target_channel, (discord.TextChannel, discord.Thread)):
+            await interaction.followup.send("This command can only be used with text channels.", ephemeral=True)
+            return
+            
+        # Get current guild settings as baseline
+        guild_settings = await self._get_guild_settings(guild.id)
+        
+        # Get any channel-specific overrides
+        channel_settings = None
+        override_enabled = False
+        try:
+            async with self.bot.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    """SELECT * FROM channel_mod_settings 
+                    WHERE guild_id = $1 AND channel_id = $2""",
+                    guild.id, target_channel.id
+                )
+                if row:
+                    override_enabled = row["override_enabled"]
+                    # We'll use the full settings from _get_guild_settings with channel_id
+        except Exception as e:
+            self.logger.error(f"Error getting channel mod settings: {e}")
+        
+        # Get the combined/effective settings
+        effective_settings = await self._get_guild_settings(guild.id, target_channel.id)
+        
+        # Create settings view
+        view = ChannelModSettingsView(self, guild.id, target_channel.id, effective_settings, override_enabled)
+        
+        # Create embed with settings info
+        embed = discord.Embed(
+            title=f"Channel AI Moderation: #{target_channel.name}",
+            description=f"Configure how the AI moderator works in {target_channel.mention}.",
+            color=BRAND_COLOR
+        )
+        
+        status = "Enabled" if effective_settings["enabled"] else "Disabled"
+        
+        embed.add_field(
+            name="Override Status", 
+            value=f"{'✅ Active' if override_enabled else '❌ Inactive'}", 
+            inline=False
+        )
+        
+        embed.add_field(
+            name="Moderation Status", 
+            value=f"{'🟢' if effective_settings['enabled'] else '🔴'} **{status}**", 
+            inline=True
+        )
+        
+        embed.add_field(
+            name="Temperature", 
+            value=f"**{effective_settings['temperature']:.1f}**", 
+            inline=True
+        )
+        
+        # Add action summary
+        embed.add_field(
+            name="Actions", 
+            value=(
+                f"**Low Severity:** {effective_settings['low_severity_action']}\n"
+                f"**Medium Severity:** {effective_settings['med_severity_action']}\n"
+                f"**High Severity:** {effective_settings['high_severity_action']}"
+            ), 
+            inline=False
+        )
+        
+        embed.set_footer(text=f"{FOOTER_TEXT} • Click buttons below to configure")
+        
+        # Send the settings panel
+        await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     
-    async def _get_guild_settings(self, guild_id: int) -> dict:
-        """Get AI moderation settings for a guild."""
+    async def _get_guild_settings(self, guild_id: int, channel_id: int = None) -> dict:
+        """Get AI moderation settings for a guild, with optional channel override.
+        
+        Args:
+            guild_id: The guild ID
+            channel_id: Optional channel ID to get channel-specific settings
+        
+        Returns:
+            dict: The moderation settings
+        """
         settings = {
             "enabled": True,  # Default enabled
             "confidence_threshold": 0.75,  # Default threshold
@@ -1672,9 +2699,57 @@ class AIModeration(commands.Cog):
         if not self.bot.pool:
             return settings
             
+        # First try to get channel-specific settings if provided
+        if channel_id:
+            try:
+                async with self.bot.pool.acquire() as conn:
+                    # Check for channel overrides
+                    channel_row = await conn.fetchrow(
+                        """
+                        SELECT 
+                            override_enabled,
+                            ai_moderation_enabled,
+                            ai_temperature_threshold,
+                            ai_low_severity_action,
+                            ai_med_severity_action,
+                            ai_high_severity_action,
+                            ai_low_severity_threshold,
+                            ai_med_severity_threshold,
+                            ai_high_severity_threshold
+                        FROM channel_mod_settings
+                        WHERE guild_id = $1 AND channel_id = $2
+                        """,
+                        guild_id, channel_id
+                    )
+                    
+                    if channel_row and channel_row["override_enabled"]:
+                        # Apply channel-specific overrides
+                        self.logger.debug(f"Using channel-specific settings for channel {channel_id} in guild {guild_id}")
+                        
+                        # Override moderation flag
+                        if channel_row["ai_moderation_enabled"] is not None:
+                            settings["enabled"] = channel_row["ai_moderation_enabled"]
+                            
+                        # Override temperature
+                        if channel_row["ai_temperature_threshold"] is not None:
+                            settings["temperature"] = channel_row["ai_temperature_threshold"]
+                            
+                        # Override severity actions and thresholds
+                        for severity in ["low", "med", "high"]:
+                            action_key = f"ai_{severity}_severity_action"
+                            threshold_key = f"ai_{severity}_severity_threshold"
+                            
+                            if channel_row[action_key]:
+                                settings[f"{severity}_severity_action"] = channel_row[action_key]
+                                
+                            if channel_row[threshold_key] is not None:
+                                settings[f"{severity}_severity_threshold"] = channel_row[threshold_key]
+            except Exception as e:
+                self.logger.error(f"Error getting channel moderation settings: {e}")
+        
         try:
             async with self.bot.pool.acquire() as conn:
-                # Try to get existing settings
+                # Get base guild settings (some settings will be overridden by channel settings if applicable)
                 row = await conn.fetchrow(
                     """
                     SELECT 
@@ -1696,28 +2771,31 @@ class AIModeration(commands.Cog):
                 )
                 
                 if row:
-                    # Basic settings
-                    settings["enabled"] = row["ai_moderation_enabled"]
+                    # Only apply base guild settings if we don't have channel overrides or for settings that aren't overridden
+                    if not channel_id or (not hasattr(locals(), 'channel_row') or not locals().get('channel_row')):
+                        # Basic settings
+                        settings["enabled"] = row["ai_moderation_enabled"]
+                        
+                        # Temperature threshold
+                        if "ai_temperature_threshold" in row and row["ai_temperature_threshold"] is not None:
+                            settings["temperature"] = row["ai_temperature_threshold"]
+                        
+                        # Progressive response settings
+                        for severity in ["low", "med", "high"]:
+                            action_key = f"ai_{severity}_severity_action"
+                            threshold_key = f"ai_{severity}_severity_threshold"
+                            
+                            if row[action_key]:
+                                settings[f"{severity}_severity_action"] = row[action_key]
+                                
+                            if row[threshold_key] is not None:
+                                settings[f"{severity}_severity_threshold"] = row[threshold_key]
                     
-                    # Temperature threshold
-                    if "ai_temperature_threshold" in row and row["ai_temperature_threshold"] is not None:
-                        settings["temperature"] = row["ai_temperature_threshold"]
-                    
+                    # Always apply these settings (they're not channel-specific)
                     # Custom warning template
                     if row["ai_warning_template"]:
                         settings["warning_template"] = row["ai_warning_template"]
                         
-                    # Progressive response settings
-                    for severity in ["low", "med", "high"]:
-                        action_key = f"ai_{severity}_severity_action"
-                        threshold_key = f"ai_{severity}_severity_threshold"
-                        
-                        if row[action_key]:
-                            settings[f"{severity}_severity_action"] = row[action_key]
-                            
-                        if row[threshold_key] is not None:
-                            settings[f"{severity}_severity_threshold"] = row[threshold_key]
-                    
                     # Contextual learning settings
                     if row["ai_include_message_context"] is not None:
                         settings["include_message_context"] = row["ai_include_message_context"]
@@ -1761,6 +2839,62 @@ class AIModeration(commands.Cog):
         except Exception as e:
             self.logger.error(f"Error updating AI moderation settings: {e}")
             return False
+    
+    async def analyze_user_message_patterns(self, user_id: int, guild_id: int):
+        """Analyze patterns in a user's recent messages to detect evasion attempts.
+        
+        This method combines recent messages from the same user to detect harmful content
+        that might be split across multiple messages to evade detection.
+        
+        Args:
+            user_id: The user's ID
+            guild_id: The guild's ID
+            
+        Returns:
+            tuple: (is_inappropriate, confidence, reason)
+        """
+        if not self.bot.pool:
+            return False, 0.0, ""
+            
+        try:
+            # Get recent messages from this user in this guild
+            async with self.bot.pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """SELECT history->>'content' as message_content 
+                    FROM user_profiles,
+                    jsonb_array_elements(message_history) as history
+                    WHERE user_id = $1 
+                    ORDER BY (history->>'timestamp')::timestamptz DESC LIMIT 5""",
+                    user_id
+                )
+                
+                if not rows or len(rows) < 2:
+                    return False, 0.0, ""
+                    
+                # Combine recent messages for analysis
+                combined_content = " ".join([row['message_content'] for row in rows if row['message_content']])
+                
+                # Skip if there's no content to analyze
+                if not combined_content or len(combined_content.strip()) < 5:
+                    return False, 0.0, ""
+                
+                self.logger.info(f"Analyzing combined message patterns for user {user_id}")
+                
+                # Re-analyze the combined content
+                is_inappropriate, confidence, reason = await self.analyze_message(
+                    message_content=combined_content,
+                    guild_id=guild_id,
+                    debug_mode=True
+                )
+                
+                if is_inappropriate:
+                    self.logger.warning(f"Pattern detection found split harmful content from user {user_id}: {reason}")
+                
+                return is_inappropriate, confidence, reason
+                    
+        except Exception as e:
+            self.logger.error(f"Error analyzing message patterns: {e}")
+            return False, 0.0, ""
     
     @app_commands.command(name="aiexplain", description="Learn about how AI moderation works")
     @app_commands.guild_only()

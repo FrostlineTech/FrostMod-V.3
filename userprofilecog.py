@@ -290,6 +290,264 @@ class UserProfiles(commands.Cog):
         except Exception as e:
             self.logger.error(f"Error updating message history for user {user_id}: {e}")
     
+    async def analyze_activity_patterns(self, user_id: int) -> Dict[str, Any]:
+        """Analyze user activity patterns to detect anomalies.
+        
+        This method analyzes several patterns:
+        1. Hourly activity distribution for time-based anomalies
+        2. Message velocity (sudden increases in message frequency)
+        3. Guild joining patterns (rapid joining of multiple servers)
+        
+        Args:
+            user_id: The user ID to analyze
+            
+        Returns:
+            dict: Analysis results with pattern data and anomaly flags
+        """
+        if not self.bot.pool:
+            return {}
+            
+        try:
+            self.logger.info(f"Analyzing activity patterns for user {user_id}")
+            results = {
+                "hourly_pattern": {},
+                "anomalies_detected": False,
+                "anomaly_types": [],
+                "message_velocity": {
+                    "unusual_burst": False,
+                    "burst_factor": 0.0
+                },
+                "join_pattern": {
+                    "rapid_joins": False,
+                    "velocity": 0.0
+                },
+                "analyzed_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            async with self.bot.pool.acquire() as conn:
+                # 1. Analyze hourly activity distribution
+                rows = await conn.fetch(
+                    """SELECT 
+                    EXTRACT(HOUR FROM (history->>'timestamp')::timestamptz) as hour,
+                    COUNT(*) as message_count
+                    FROM user_profiles,
+                    jsonb_array_elements(message_history) as history
+                    WHERE user_id = $1
+                    GROUP BY hour
+                    ORDER BY hour""",
+                    user_id
+                )
+                
+                if rows:
+                    # Build hourly pattern
+                    hourly_counts = {}
+                    total_messages = 0
+                    for row in rows:
+                        hour = int(row['hour'])
+                        count = row['message_count']
+                        hourly_counts[hour] = count
+                        total_messages += count
+                    
+                    # Calculate expected distribution (roughly even with peak during active hours)
+                    if total_messages > 0:
+                        results["hourly_pattern"] = hourly_counts
+                        
+                        # Look for unusual concentration (>70% of activity in off-hours 0-6)
+                        night_hours_count = sum(hourly_counts.get(h, 0) for h in range(0, 6))
+                        night_hours_percent = night_hours_count / total_messages if total_messages > 0 else 0
+                        
+                        if night_hours_percent > 0.7 and total_messages > 10:
+                            results["anomalies_detected"] = True
+                            results["anomaly_types"].append("unusual_hours")
+                
+                # 2. Check for message velocity anomalies
+                # Look at messages per minute in recent history
+                message_rows = await conn.fetch(
+                    """SELECT 
+                    (history->>'timestamp')::timestamptz as msg_time
+                    FROM user_profiles,
+                    jsonb_array_elements(message_history) as history
+                    WHERE user_id = $1
+                    ORDER BY (history->>'timestamp')::timestamptz DESC
+                    LIMIT 100""",
+                    user_id
+                )
+                
+                if message_rows and len(message_rows) >= 5:
+                    # Group by minute and look for bursts
+                    messages_by_minute = {}
+                    for row in message_rows:
+                        minute_key = row['msg_time'].strftime("%Y-%m-%d %H:%M")
+                        if minute_key in messages_by_minute:
+                            messages_by_minute[minute_key] += 1
+                        else:
+                            messages_by_minute[minute_key] = 1
+                    
+                    # Calculate average and detect bursts
+                    if messages_by_minute:
+                        avg_per_minute = sum(messages_by_minute.values()) / len(messages_by_minute)
+                        max_per_minute = max(messages_by_minute.values())
+                        burst_factor = max_per_minute / avg_per_minute if avg_per_minute > 0 else 0
+                        
+                        results["message_velocity"]["burst_factor"] = burst_factor
+                        if burst_factor > 5:  # 5x normal rate is suspicious
+                            results["message_velocity"]["unusual_burst"] = True
+                            results["anomalies_detected"] = True
+                            results["anomaly_types"].append("message_burst")
+                
+                # 3. Check guild join patterns
+                profile = await self._get_user_profile(user_id)
+                if profile and 'guilds' in profile:
+                    guilds = json.loads(profile.get('guilds', '[]')) if isinstance(profile.get('guilds'), str) else profile.get('guilds', [])
+                    if len(guilds) >= 3:  # Only meaningful with at least 3 guilds
+                        # Check for rapid joins (multiple servers in short time)
+                        join_times = []
+                        for guild in guilds:
+                            if 'joined_at' in guild:
+                                try:
+                                    join_time = datetime.fromisoformat(guild['joined_at'].replace('Z', '+00:00'))
+                                    join_times.append(join_time)
+                                except (ValueError, AttributeError):
+                                    continue
+                                    
+                        if len(join_times) >= 3:
+                            # Sort join times and calculate time between joins
+                            join_times.sort()
+                            time_between_joins = [(join_times[i+1] - join_times[i]).total_seconds() 
+                                                for i in range(len(join_times)-1)]
+                            
+                            # Calculate average time between joins
+                            if time_between_joins:
+                                avg_time = sum(time_between_joins) / len(time_between_joins)
+                                # Very rapid joining (avg < 5 minutes between joins)
+                                if avg_time < 300 and len(join_times) >= 3:
+                                    results["join_pattern"]["rapid_joins"] = True
+                                    results["join_pattern"]["velocity"] = 300 / avg_time if avg_time > 0 else 10
+                                    results["anomalies_detected"] = True
+                                    results["anomaly_types"].append("rapid_joins")
+            
+            # Store the analysis results in the user profile
+            if results["anomalies_detected"]:
+                self.logger.warning(
+                    f"Anomalies detected for user {user_id}: {', '.join(results['anomaly_types'])}"
+                )
+                
+                # Update the profile with analysis results
+                async with self.bot.pool.acquire() as conn:
+                    await conn.execute(
+                        """UPDATE user_profiles SET 
+                        activity_pattern = $1,
+                        profile_updated_at = NOW()
+                        WHERE user_id = $2""",
+                        json.dumps(results),
+                        user_id
+                    )
+                    
+            return results
+                
+        except Exception as e:
+            self.logger.error(f"Error analyzing activity patterns for user {user_id}: {e}")
+            return {"error": str(e), "anomalies_detected": False}
+    
+    async def _analyze_social_connections(self, user_id: int) -> float:
+        """Analyze a user's social connections to identify patterns.
+        
+        This method identifies connections between users, particularly focusing on
+        interactions with other high-risk users.
+        
+        Args:
+            user_id: The user ID to analyze
+            
+        Returns:
+            float: Social risk factor (0.0-1.0)
+        """
+        if not self.bot.pool:
+            return 0.0
+            
+        try:
+            social_risk = 0.0
+            social_connections = {}
+            
+            async with self.bot.pool.acquire() as conn:
+                # Find other users that the target user frequently interacts with
+                # Using message_history which contains guild_id to identify mutual guilds
+                profile = await self._get_user_profile(user_id)
+                if not profile:
+                    return 0.0
+                    
+                message_history = json.loads(profile.get('message_history', '[]')) if isinstance(profile.get('message_history'), str) else profile.get('message_history', [])
+                
+                # Extract guilds this user belongs to
+                user_guilds = []
+                if profile.get('guilds'):
+                    guilds_data = json.loads(profile.get('guilds', '[]')) if isinstance(profile.get('guilds'), str) else profile.get('guilds', [])
+                    user_guilds = [g.get('guild_id') for g in guilds_data if 'guild_id' in g]
+                
+                if not user_guilds:
+                    return 0.0
+                    
+                # Find users who share multiple guilds
+                shared_guild_users = await conn.fetch(
+                    """SELECT up.user_id, up.risk_assessment, up.risk_score,
+                    jsonb_array_length(up.guilds) as guild_count,
+                    (SELECT COUNT(*) FROM (
+                        SELECT g->>'guild_id' as guild_id FROM jsonb_array_elements(up.guilds) g
+                        INTERSECT
+                        SELECT unnest($1::bigint[]) as guild_id
+                    ) as shared) as shared_guilds
+                    FROM user_profiles up
+                    WHERE up.user_id != $2
+                    AND shared_guilds > 0
+                    ORDER BY shared_guilds DESC
+                    LIMIT 20""",
+                    user_guilds, user_id
+                )
+                
+                # Calculate social risk based on connections to high-risk users
+                total_connections = len(shared_guild_users)
+                if total_connections == 0:
+                    return 0.0
+                    
+                # Count high-risk connections
+                high_risk_connections = 0
+                for row in shared_guild_users:
+                    risk_level = row['risk_assessment']
+                    risk_score = row['risk_score'] or 0.0
+                    shared_count = row['shared_guilds']
+                    
+                    # Add to social connections dict
+                    social_connections[row['user_id']] = {
+                        "risk_level": risk_level,
+                        "risk_score": risk_score,
+                        "shared_guilds": shared_count
+                    }
+                    
+                    # Count users with HIGH or VERY HIGH risk, or risk score > 70
+                    if risk_level in ("HIGH", "VERY HIGH") or risk_score > 70:
+                        # Weight by number of shared guilds (more shared = stronger connection)
+                        high_risk_connections += shared_count
+                
+                # Calculate social risk factor (0.0-1.0)
+                if high_risk_connections > 0:
+                    # Normalize based on total connections
+                    max_possible = sum(row['shared_guilds'] for row in shared_guild_users)
+                    social_risk = high_risk_connections / max_possible if max_possible > 0 else 0.0
+                    # Cap at 1.0
+                    social_risk = min(1.0, social_risk)
+                    
+                    # Log if significant
+                    if social_risk > 0.3:
+                        self.logger.info(
+                            f"User {user_id} has significant social connections to high-risk users "
+                            f"(social risk factor: {social_risk:.2f})"
+                        )
+            
+            return social_risk
+                
+        except Exception as e:
+            self.logger.error(f"Error analyzing social connections for user {user_id}: {e}")
+            return 0.0
+    
     async def _update_risk_assessment(self, user: discord.User) -> Tuple[str, float, List[str]]:
         """Update a user's risk assessment using AI analysis."""
         if not self.bot.pool:
@@ -309,7 +567,7 @@ class UserProfiles(commands.Cog):
                 account_age_days = (datetime.now(timezone.utc) - user.created_at).days
                 
             # Get data for AI analysis
-            message_history = json.loads(profile.get('message_history', '[]'))
+            message_history = json.loads(profile.get('message_history', '[]')) if isinstance(profile.get('message_history'), str) else profile.get('message_history', [])
             message_count = profile.get('message_count', 0)
             
             # Default values
@@ -324,12 +582,18 @@ class UserProfiles(commands.Cog):
                 self.logger.info(f"Generating risk assessment for user {user.id} ({user.name})")
                 
                 # Extract message content for analysis
-                message_texts = [msg.get('content', '') for msg in message_history]
+                message_texts = [msg.get('content', '') for msg in message_history if isinstance(msg, dict) and 'content' in msg]
                 messages_joined = "\n".join(message_texts)
                 
-                # Create a prompt for the AI
+                # Also analyze activity patterns
+                activity_patterns = await self.analyze_activity_patterns(user.id)
+                
+                # Get social connections risk factor
+                social_risk = await self._analyze_social_connections(user.id) 
+                
+                # Create a prompt for the AI with enhanced context
                 system_prompt = """You are an AI risk assessment system for a Discord server. 
-                Analyze the user's message history and assess their risk level.
+                Analyze the user's message history, activity patterns, and connections to assess their risk level.
                 Provide a risk assessment with the following components:
                 1. RISK_LEVEL: One of LOW, MEDIUM, HIGH, VERY HIGH
                 2. RISK_SCORE: A number from 0-100 representing risk (higher = more risky)
@@ -348,9 +612,14 @@ class UserProfiles(commands.Cog):
                 Recent message samples:
                 {messages_joined}
                 
+                Activity Anomalies: {"Yes, " + ", ".join(activity_patterns.get("anomaly_types", [])) if activity_patterns.get("anomalies_detected", False) else "None detected"}
+                
+                Social Risk Factor: {social_risk:.2f} (scale 0-1, higher means more connections to high-risk users)
+                
                 Analyze this user's risk level. Consider:
                 - Message content and tone
-                - Suspicious patterns or behaviors
+                - Activity patterns and anomalies
+                - Social connections to high-risk users
                 - Signs of potential harmful activity
                 
                 Provide your assessment as a JSON with risk_level, risk_score, and risk_factors.
@@ -388,6 +657,32 @@ class UserProfiles(commands.Cog):
                                     
                                 # Ensure score is in valid range
                                 risk_score = max(0.0, min(100.0, risk_score))
+                                
+                                # Boost risk score based on activity anomalies
+                                if activity_patterns.get("anomalies_detected", False):
+                                    anomaly_types = activity_patterns.get("anomaly_types", [])
+                                    if anomaly_types:
+                                        risk_score += min(15, len(anomaly_types) * 5)  # Up to +15 points
+                                        risk_factors.append(f"Unusual activity patterns: {', '.join(anomaly_types)}")
+                                
+                                # Boost risk score based on social connections
+                                if social_risk > 0.3:  # Significant connections to high-risk users
+                                    risk_score += min(20, social_risk * 25)  # Up to +20 points
+                                    risk_factors.append(f"Significant connections to high-risk users")
+                                    
+                                # Cap risk score at 100
+                                risk_score = min(100.0, risk_score)
+                                
+                                # Update risk level based on final score
+                                if risk_score >= 85:
+                                    risk_level = "VERY HIGH"
+                                elif risk_score >= 65:
+                                    risk_level = "HIGH"
+                                elif risk_score >= 40:
+                                    risk_level = "MEDIUM"
+                                else:
+                                    risk_level = "LOW"
+                                    
                         except (json.JSONDecodeError, ValueError) as e:
                             self.logger.error(f"Error parsing AI response for user {user.id}: {e}")
                     

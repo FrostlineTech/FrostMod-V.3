@@ -63,9 +63,14 @@ A focused plan for upcoming improvements to FrostMod. Timelines are indicative a
 - [x] Create user profiling system that tracks message patterns and guild activity
 - [x] Develop AI-based risk assessment with multiple risk factors
 - [x] Ensure timezone-aware datetime handling for all user analytics
+- [x] Implement channel-specific moderation settings with `/channelmod` command
+- [x] Add message pattern recognition to detect content split across multiple messages
+- [x] Implement activity pattern analysis for anomaly detection
+- [x] Add social connection analysis to detect networks of high-risk users
+- [x] Create AI-powered help system with `/ask` and `/askabout` commands
 - [ ] Add moderation actions triggered by high risk levels
 - [ ] Implement customizable risk thresholds per server
-- [X] implement `/aimodstats` command to view AI moderation statistics
+- [x] Implement `/modstats` command to view AI moderation statistics
 
 ## 9) Nice-to-haves
 

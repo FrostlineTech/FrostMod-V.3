@@ -10,9 +10,20 @@ All notable changes to this project will be documented in this file.
 - Added `/disabletheta` command to enable/disable AI moderation per server
 - Added `/testmod` command to test AI moderation on sample messages
 - Added `/modstats` command to view AI moderation statistics and hardware metrics
+- Added `/channelmod` command for channel-specific moderation settings
 - Implemented user profiling system that tracks message patterns and guild activity
 - Added `/risklevel` command for admins to assess potential user risks using AI
-- Automatic risk factor identification based on message content and behavior patterns
+- Added message pattern recognition to detect content split across multiple messages
+- Implemented activity pattern analysis for anomaly detection
+- Added social connection analysis to detect networks of high-risk users
+- Implemented enhanced risk assessment with detailed risk factors
+
+### AI Assistance Features
+
+- Added AI-powered help system with `/ask` command
+- Added context-aware topic assistant with `/askabout` command
+- Server-specific knowledge based on rules, channels, and role structure
+- Conversation memory for more relevant responses
 
 ### Technical Improvements
 

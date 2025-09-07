@@ -59,7 +59,9 @@ def help_category_embed(category: str, interaction: discord.Interaction) -> disc
             "4) `/jrole <@role>` — set autorole (ensure bot role is higher)\n"
             "5) `/poll` — create a poll (admin only)\n"
             "6) `/status`, `/db` — diagnostics\n"
-            "7) `/disabletheta` — configure AI moderation settings"
+            "7) `/disabletheta` — configure AI moderation settings\n"
+            "8) `/channelmod` — set channel-specific moderation\n"
+            "9) `/ask` — get help from the AI assistant"
         )
         return make_embed(title="Admin Help — Setup", description=desc, interaction=interaction)
     if category == "logging":
@@ -89,10 +91,15 @@ def help_category_embed(category: str, interaction: discord.Interaction) -> disc
         desc = (
             "AI moderation features using local DeepSeek model:\n\n"
             "`/disabletheta` — Enable/disable AI moderation for the server\n"
+            "`/channelmod [#channel]` — Configure channel-specific moderation settings\n"
             "`/testmod <message>` — Test AI moderation on a sample message\n"
             "`/modstats` — View AI moderation statistics and performance metrics\n"
-            "`/aiexplain` — Learn how AI moderation works in detail\n\n"
-            "The AI model analyzes messages for inappropriate content and can warn or delete based on confidence levels."
+            "`/aiexplain` — Learn how AI moderation works in detail\n"
+            "`/ask` — Ask the AI assistant a question about the server\n"
+            "`/askabout <topic>` — Ask about a specific topic with context\n\n"
+            "The AI model analyzes messages for inappropriate content and can warn or delete based on confidence levels. "
+            "Advanced pattern recognition can detect harmful content split across multiple messages. "
+            "Channel-specific settings allow for different moderation levels in different areas of your server."
         )
         return make_embed(title="Admin Help — AI Moderation", description=desc, interaction=interaction)
         
@@ -101,8 +108,12 @@ def help_category_embed(category: str, interaction: discord.Interaction) -> disc
             "User profiling and risk assessment features:\n\n"
             "`/risklevel <@user>` — Get an AI-based risk assessment for a user\n\n"
             "The system automatically builds user profiles based on message patterns, guild membership, and activity. "
-            "Administrators can use the risk assessment to identify potentially problematic users. "
-            "All assessments include risk factors, confidence scores, and account metadata."
+            "Advanced features include:\n"
+            "• Activity pattern analysis to detect unusual behavior\n"
+            "• Social connection analysis to identify networks of high-risk users\n"
+            "• Message velocity tracking to detect suspicious bursts\n"
+            "• Account creation clustering detection\n\n"
+            "Risk assessments include multiple factors with confidence scores and detailed metadata."
         )
         return make_embed(title="Admin Help — User Profiling", description=desc, interaction=interaction)
     if category == "perms":

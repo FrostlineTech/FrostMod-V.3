@@ -9,9 +9,11 @@ from ui import make_embed
 
 
 ABOUT_TEXT = (
-    "FrostMod is a modern moderation and utility bot focused on clear logs, simple setup, and helpful server tools — with fun extras (mini games and memes).\n\n"
+    "FrostMod is a modern moderation and utility bot focused on clear logs, AI-powered moderation, and helpful server tools — with fun extras (mini games and memes).\n\n"
+    "Features: Advanced AI moderation with channel-specific settings, user profiling with risk assessment, pattern recognition for content split across messages, "
+    "and an AI assistant that can answer questions about your server.\n\n"
     "Privacy: Only configured items are logged (see /logs). We store lightweight server config and activity metrics to improve features like /activity. "
-    "No message content is stored beyond what is necessary for logs you explicitly enable.\n\n"
+    "User profiling data is used only for authorized risk assessments and AI functionality. No message content is stored beyond what is necessary for logs you explicitly enable.\n\n"
     "Support: frostlinesolutions.com — Powered by Frostline Solutions LLC."
 )
 
@@ -22,6 +24,9 @@ MEMBER_COMMANDS = [
     ("/avatar", "Show a user's avatar with quick Open/Copy ID buttons."),
     ("/banner", "Show a user's banner if available."),
     ("/userinfo", "Compact profile summary: ID, created, joined, roles."),
+    ("/ask", "Ask the AI assistant a question about the server."),
+    ("/askabout", "Ask about a specific topic with context-aware responses."),
+    ("/aiexplain", "Learn how AI moderation works in detail."),
     ("/rps", "Play Rock-Paper-Scissors vs the bot (buttons)."),
     ("/tictactoe", "Challenge a member to TicTacToe (buttons)."),
     ("/connect4", "Challenge a member to Connect 4 (buttons)."),

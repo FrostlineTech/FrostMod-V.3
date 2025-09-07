@@ -8,3 +8,4 @@ FOOTER_TEXT = "Powered by Frostline Solutions LLC / frostlinesolutions.com"
 GREEN = 0x43B581
 YELLOW = 0xFAA61A
 RED = 0xF04747
+
